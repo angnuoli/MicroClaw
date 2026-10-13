@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 
-OPENCLAW_TARGET_VERSION = "2026.9.3"
+OPENCLAW_TARGET_VERSION = "2026.10.2"
+NODE_DEFAULT_MAJOR = "26"
 NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0"
 NODE_FALLBACK_VERSION = "26.1.0"
 

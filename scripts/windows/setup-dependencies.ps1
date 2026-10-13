@@ -24,7 +24,7 @@
     跳过 Git 安装
 
 .PARAMETER OpenClawTag
-    OpenClaw npm 安装 tag (默认: 2026.9.3)
+    OpenClaw npm 安装 tag (默认: 2026.10.2)
 
 .EXAMPLE
     .\setup-dependencies.ps1
@@ -37,7 +37,7 @@ param(
     [ValidateSet("npmmirror", "tencent")]
     [string]$Mirror = "npmmirror",
     [switch]$SkipGit,
-    [string]$OpenClawTag = "2026.9.3"
+    [string]$OpenClawTag = "2026.10.2"
 )
 
 Set-StrictMode -Version Latest

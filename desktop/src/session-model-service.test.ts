@@ -244,26 +244,30 @@ describe("session model reads", () => {
 });
 
 describe("session model selection", () => {
-  it("selects a configured cloud model with only an official metadata patch", async () => {
-    const f = fixture();
-    const config = structuredClone(f.config);
-    await expect(f.service.select({ sessionKey: "chat", modelRef: "cloud/b" })).resolves.toEqual({
-      sessionKey: "agent:main:chat",
-      modelRef: "cloud/b",
-      overridden: true,
-    });
-    expect(f.patches()[0][1]).toEqual({
-      key: "agent:main:chat",
-      agentId: "main",
-      model: "cloud/b",
-    });
-    expect(f.config).toEqual(config);
-    expect(
-      f.request.mock.calls.every(([method]) =>
-        ["sessions.describe", "sessions.list", "sessions.patch", "config.get"].includes(method),
-      ),
-    ).toBe(true);
-  });
+  it.each(["2026.9.3", "2026.10.2"])(
+    "selects a configured cloud model on %s with only an official metadata patch",
+    async (version) => {
+      const f = fixture();
+      f.gateway.serverVersion = version;
+      const config = structuredClone(f.config);
+      await expect(f.service.select({ sessionKey: "chat", modelRef: "cloud/b" })).resolves.toEqual({
+        sessionKey: "agent:main:chat",
+        modelRef: "cloud/b",
+        overridden: true,
+      });
+      expect(f.patches()[0][1]).toEqual({
+        key: "agent:main:chat",
+        agentId: "main",
+        model: "cloud/b",
+      });
+      expect(f.config).toEqual(config);
+      expect(
+        f.request.mock.calls.every(([method]) =>
+          ["sessions.describe", "sessions.list", "sessions.patch", "config.get"].includes(method),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("clears only the session override and restores the agent default", async () => {
     const f = fixture();

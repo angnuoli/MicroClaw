@@ -6,6 +6,7 @@ import { GatewayRequestError } from "./gateway-client";
 import {
   LocalModelService,
   hasLocalModelPrimary,
+  supportsLocalModelGatewayVersion,
   supportsLocalModelVersion,
   validateLocalModelUrl,
   LOCAL_MODEL_DETECTION_TTL_MS,
@@ -411,6 +412,17 @@ describe("local model protocol guards", () => {
   });
   it.each(["2026.9.3", "2026.9.4"])("accepts the supported host %s", (version) => {
     expect(supportsLocalModelVersion(version)).toBe(true);
+  });
+  it.each(["2026.9.3", "2026.9.4", "2026.10.2", "2026.10.2+build.1"])(
+    "accepts the verified Gateway release %s",
+    (version) => expect(supportsLocalModelGatewayVersion(version)).toBe(true),
+  );
+  it.each(["2026.10.1", "2026.10.3", "2026.10.2-beta.1", null])(
+    "does not broaden Gateway compatibility to %s",
+    (version) => expect(supportsLocalModelGatewayVersion(version)).toBe(false),
+  );
+  it("does not treat Gateway support as permission to replace the pinned provider", () => {
+    expect(supportsLocalModelVersion("2026.10.2")).toBe(false);
   });
   it.each([null, "2026.9.2", "2026.10.1", "2026.9.3-beta.1", "unknown"])(
     "does not assume compatibility for %s",

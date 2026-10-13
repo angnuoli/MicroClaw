@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import { inspectLocalModelFiles } from "./local-model-files";
 import { GatewayRequestError } from "./gateway-client";
-import { supportsLocalModelVersion, validateLocalModelUrl } from "./local-model-service";
+import { supportsLocalModelGatewayVersion, validateLocalModelUrl } from "./local-model-service";
 import {
   parseGitHubCopilotGatewayAuthStatus,
   parseGitHubCopilotGatewayModels,
@@ -283,8 +283,8 @@ export class SessionModelService {
   private context(): Context {
     const gateway = this.deps.gateway();
     if (!gateway?.connected) throw new Error("Gateway is not connected");
-    if (!supportsLocalModelVersion(gateway.serverVersion)) {
-      throw new Error("Session model selection requires OpenClaw 2026.9.3");
+    if (!supportsLocalModelGatewayVersion(gateway.serverVersion)) {
+      throw new Error("Session model selection requires a supported OpenClaw Gateway");
     }
     for (const method of ["sessions.describe", "sessions.list", "sessions.patch", "config.get"]) {
       if (!gateway.methods.includes(method)) throw new Error(`Gateway does not support ${method}`);

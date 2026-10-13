@@ -7,16 +7,16 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isMainThread } from "node:worker_threads";
 
-const EXPECTED_VERSION = "2026.9.3";
-const EXPECTED_NODE_GATEWAY_MODULE = "nodes-C8-hkmi0.mjs";
+const EXPECTED_VERSION = "2026.10.2";
+const EXPECTED_NODE_GATEWAY_MODULE = "nodes-CUbe_1MQ.mjs";
 const EXPECTED_NODE_GATEWAY_SHA256 =
-  "805c73836285f1b0bd503f755b388052e75dfc21efdac5a408731e6efcb72fbb";
-const EXPECTED_SYSTEM_RUN_MODULE = "system-run-approval-binding-DMkQH3tb.mjs";
+  "3bc901af8f195d8b5d7ed41b2c50656f3da2ff160938d94d97d0c2fa8e42e676";
+const EXPECTED_SYSTEM_RUN_MODULE = "system-run-approval-plan-Cu-Ftdkp.mjs";
 const EXPECTED_SYSTEM_RUN_SHA256 =
-  "08ae201f03f2b0bcd2c8c91ade26acf1572401001ed3daf1564910058c598bfd";
-const EXPECTED_EXEC_APPROVAL_MODULE = "exec-approval-B0MHHes6.mjs";
+  "c0df5badb2a8cc6adfdfb8bac48e5379e0825005e0dec827d01b2fb3e223820e";
+const EXPECTED_EXEC_APPROVAL_MODULE = "exec-approval-mGU7M4-K.mjs";
 const EXPECTED_EXEC_APPROVAL_SHA256 =
-  "182e54781c24463a2b636aa0ecebd9fa959871c594167fb0f14d9301d496edc2";
+  "aacf6a38e1ea77a9ce02fc4f60069230eec6b9c0a2e7123d35032eb105253267";
 export const APPROVAL_PROOF_CONTRACT = "microclaw.windows-node-approval.v1";
 export const APPROVAL_PROOF_PLAN_CONTRACT = "microclaw.windows-node-approval-plan.v2";
 export const APPROVAL_PROOF_TTL_MS = 15_000;
@@ -24,58 +24,50 @@ const APPROVAL_PROOF_MINTER_SYMBOL = Symbol.for("microclaw.windows-node-mxc.appr
 const PRELOAD_INITIALIZED_ENV = "MICROCLAW_MXC_APPROVAL_PRELOAD_INITIALIZED";
 
 export const PINNED_NODE_GATEWAY_MINT_INSERT_SOURCE =
-  "function sanitizeSystemRunParamsForForwarding(opts) {";
+  "async function sanitizeSystemRunParamsForForwarding(opts) {";
 const PATCHED_NODE_GATEWAY_MINT_INSERT_SOURCE = `function mintMicroclawNodeApprovalProof(params) {
 \tconst minter = globalThis[Symbol.for("microclaw.windows-node-mxc.approval-proof.v1")];
 \tif (!minter || typeof minter.mint !== "function") throw new Error("MicroClaw node approval proof minter is unavailable");
 \treturn minter.mint(params);
 }
-function sanitizeSystemRunParamsForForwarding(opts) {`;
+async function sanitizeSystemRunParamsForForwarding(opts) {`;
 
-export const PINNED_NODE_GATEWAY_ALLOW_ONCE_SOURCE = `\tif (snapshot.decision === "allow-once") {
+export const PINNED_NODE_GATEWAY_APPROVAL_SOURCE = `\tconst approvalDecision = snapshot.decision;
+\tif (approvalDecision === "allow-once" || approvalDecision === "allow-always") {
 \t\tif (approvalSource !== null) return systemRunApprovalGuardError({
 \t\t\tcode: "APPROVAL_SOURCE_MISMATCH",
 \t\t\tmessage: "approval source does not match approval record",
 \t\t\tdetails: { runId }
 \t\t});
-\t\tif (recordedResolutionSource === "auto-review") {
-\t\t\tif (!runtimeContext.plan) return systemRunApprovalGuardError({
-\t\t\t\tcode: "APPROVAL_PLAN_REQUIRED",
-\t\t\t\tmessage: "auto-review approval requires an approved execution plan",
-\t\t\t\tdetails: { runId }
-\t\t\t});
+\t\tif (approvalDecision === "allow-once" && recordedResolutionSource === "auto-review" && !runtimeContext.plan) return systemRunApprovalGuardError({
+\t\t\tcode: "APPROVAL_PLAN_REQUIRED",
+\t\t\tmessage: "auto-review approval requires an approved execution plan",
+\t\t\tdetails: { runId }
+\t\t});
+\t\tif (approvalDecision === "allow-once" && (typeof manager.consumeAllowOnce !== "function" || !await manager.consumeAllowOnce(runId))) return systemRunApprovalRequired(runId);
+\t\tif (approvalDecision === "allow-once" && recordedResolutionSource === "auto-review") next.approvalSource = "auto-review";
+\t\telse {
+\t\t\tnext.approved = true;
+\t\t\tnext.approvalDecision = approvalDecision;
 \t\t}
-\t\tif (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) return systemRunApprovalRequired(runId);
-\t\tif (recordedResolutionSource === "auto-review") {
-\t\t\tnext.approvalSource = "auto-review";
-\t\t\treturn {
-\t\t\t\tok: true,
-\t\t\t\tparams: next,
-\t\t\t\tapprovalAuthority: {
-\t\t\t\t\trecordId: runId,
-\t\t\t\t\tdecision: "allow-once"
-\t\t\t\t}
-\t\t\t};
-\t\t}
-\t\tnext.approved = true;
-\t\tnext.approvalDecision = "allow-once";
 \t\treturn {
 \t\t\tok: true,
 \t\t\tparams: next,
 \t\t\tapprovalAuthority: {
 \t\t\t\trecordId: runId,
-\t\t\t\tdecision: "allow-once"
+\t\t\t\tdecision: approvalDecision
 \t\t\t}
 \t\t};
 \t}`;
-const PATCHED_NODE_GATEWAY_ALLOW_ONCE_SOURCE = `\tif (snapshot.decision === "allow-once") {
+const PATCHED_NODE_GATEWAY_APPROVAL_SOURCE = `\tconst approvalDecision = snapshot.decision;
+\tif (approvalDecision === "allow-once" || approvalDecision === "allow-always") {
 \t\tif (approvalSource !== null) return systemRunApprovalGuardError({
 \t\t\tcode: "APPROVAL_SOURCE_MISMATCH",
 \t\t\tmessage: "approval source does not match approval record",
 \t\t\tdetails: { runId }
 \t\t});
-\t\tif (recordedResolutionSource !== "operator") return systemRunApprovalRequired(runId);
-\t\tif (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) return systemRunApprovalRequired(runId);
+\t\tif (approvalDecision !== "allow-once" || recordedResolutionSource !== "operator") return systemRunApprovalRequired(runId);
+\t\tif (typeof manager.consumeAllowOnce !== "function" || !await manager.consumeAllowOnce(runId)) return systemRunApprovalRequired(runId);
 \t\tnext.approved = true;
 \t\tnext.approvalDecision = "allow-once";
 \t\tnext.microclawApprovalProof = mintMicroclawNodeApprovalProof({
@@ -91,27 +83,6 @@ const PATCHED_NODE_GATEWAY_ALLOW_ONCE_SOURCE = `\tif (snapshot.decision === "all
 \t\t\t\tdecision: "allow-once"
 \t\t\t}
 \t\t};
-\t}`;
-
-export const PINNED_NODE_GATEWAY_ALLOW_ALWAYS_SOURCE = `\tif (snapshot.decision === "allow-always") {
-\t\tif (approvalSource !== null) return systemRunApprovalGuardError({
-\t\t\tcode: "APPROVAL_SOURCE_MISMATCH",
-\t\t\tmessage: "approval source does not match approval record",
-\t\t\tdetails: { runId }
-\t\t});
-\t\tnext.approved = true;
-\t\tnext.approvalDecision = "allow-always";
-\t\treturn {
-\t\t\tok: true,
-\t\t\tparams: next,
-\t\t\tapprovalAuthority: {
-\t\t\t\trecordId: runId,
-\t\t\t\tdecision: "allow-always"
-\t\t\t}
-\t\t};
-\t}`;
-const PATCHED_NODE_GATEWAY_ALLOW_ALWAYS_SOURCE = `\tif (snapshot.decision === "allow-always") {
-\t\treturn systemRunApprovalRequired(runId);
 \t}`;
 
 export const PINNED_NODE_GATEWAY_ASK_FALLBACK_SOURCE = `\tif (timedOut && approvalSource === "ask-fallback" && !approved && requestedDecision === null && clientHasApprovals(opts.client)) {
@@ -135,24 +106,23 @@ const PATCHED_NODE_GATEWAY_ASK_FALLBACK_SOURCE = `\tif (timedOut && approvalSour
 \t\treturn systemRunApprovalRequired(runId);
 \t}`;
 
-export const PINNED_SYSTEM_RUN_PLAN_SOURCE = `function normalizeSystemRunApprovalPlan(value) {
-\tif (!value || typeof value !== "object" || Array.isArray(value)) return null;
-\tconst candidate = value;
+export const PINNED_SYSTEM_RUN_PLAN_SOURCE = `function normalizeSystemRunApprovalPlan(candidate) {
+\tif (!isRecord(candidate)) return null;
 \tconst argv = normalizeStringArray(candidate.argv);
 \tif (argv.length === 0) return null;
 \tconst mutableFileOperand = normalizeSystemRunApprovalFileOperand(candidate.mutableFileOperand);
 \tif (candidate.mutableFileOperand !== void 0 && mutableFileOperand === null) return null;
 \tconst policySnapshot = normalizeExecApprovalPolicySnapshot(candidate.policySnapshot);
 \tif (candidate.policySnapshot !== void 0 && policySnapshot === null) return null;
-\tconst commandText = normalizeNonEmptyString(candidate.commandText) ?? normalizeNonEmptyString(candidate.rawCommand);
+\tconst commandText = normalizeNullableString(candidate.commandText) ?? normalizeNullableString(candidate.rawCommand);
 \tif (!commandText) return null;
 \treturn {
 \t\targv,
-\t\tcwd: normalizeNonEmptyString(candidate.cwd),
+\t\tcwd: normalizeNullableString(candidate.cwd),
 \t\tcommandText,
-\t\tcommandPreview: normalizeNonEmptyString(candidate.commandPreview),
-\t\tagentId: normalizeNonEmptyString(candidate.agentId),
-\t\tsessionKey: normalizeNonEmptyString(candidate.sessionKey),
+\t\tcommandPreview: normalizeNullableString(candidate.commandPreview),
+\t\tagentId: normalizeNullableString(candidate.agentId),
+\t\tsessionKey: normalizeNullableString(candidate.sessionKey),
 \t\t...policySnapshot ? { policySnapshot } : {},
 \t\tmutableFileOperand: mutableFileOperand ?? void 0
 \t};
@@ -164,36 +134,35 @@ const PATCHED_SYSTEM_RUN_PLAN_SOURCE = `function normalizeMicroclawSystemRunDecl
 \tfor (const item of value) {
 \t\tif (!item || typeof item !== "object" || Array.isArray(item)) return null;
 \t\tconst access = item.access;
-\t\tconst folderPath = normalizeNonEmptyString(item.path);
+\t\tconst folderPath = normalizeNullableString(item.path);
 \t\tif ((access !== "ro" && access !== "rw") || !folderPath) return null;
 \t\tentries.push({ access, path: folderPath });
 \t}
 \treturn entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 }
-function normalizeSystemRunApprovalPlan(value) {
-\tif (!value || typeof value !== "object" || Array.isArray(value)) return null;
-\tconst candidate = value;
+function normalizeSystemRunApprovalPlan(candidate) {
+\tif (!isRecord(candidate)) return null;
 \tconst argv = normalizeStringArray(candidate.argv);
 \tif (argv.length === 0) return null;
 \tconst mutableFileOperand = normalizeSystemRunApprovalFileOperand(candidate.mutableFileOperand);
 \tif (candidate.mutableFileOperand !== void 0 && mutableFileOperand === null) return null;
 \tconst policySnapshot = normalizeExecApprovalPolicySnapshot(candidate.policySnapshot);
 \tif (candidate.policySnapshot !== void 0 && policySnapshot === null) return null;
-\tconst commandText = normalizeNonEmptyString(candidate.commandText) ?? normalizeNonEmptyString(candidate.rawCommand);
+\tconst commandText = normalizeNullableString(candidate.commandText) ?? normalizeNullableString(candidate.rawCommand);
 \tif (!commandText) return null;
 \tconst hasMicroclawIdentity = candidate.executablePath !== void 0 || candidate.executableSha256 !== void 0 || candidate.cwdBinding !== void 0 || candidate.declaredAccess !== void 0;
-\tconst executablePath = normalizeNonEmptyString(candidate.executablePath);
-\tconst executableSha256 = normalizeNonEmptyString(candidate.executableSha256);
-\tconst cwdBinding = normalizeNonEmptyString(candidate.cwdBinding);
+\tconst executablePath = normalizeNullableString(candidate.executablePath);
+\tconst executableSha256 = normalizeNullableString(candidate.executableSha256);
+\tconst cwdBinding = normalizeNullableString(candidate.cwdBinding);
 \tconst declaredAccess = normalizeMicroclawSystemRunDeclaredAccess(candidate.declaredAccess);
 \tif (hasMicroclawIdentity && (!executablePath || !/^[a-z]:\\\\/i.test(executablePath) || !executableSha256 || !/^[a-f0-9]{64}$/i.test(executableSha256) || !cwdBinding || declaredAccess === null)) return null;
 \treturn {
 \t\targv,
-\t\tcwd: normalizeNonEmptyString(candidate.cwd),
+\t\tcwd: normalizeNullableString(candidate.cwd),
 \t\tcommandText,
-\t\tcommandPreview: normalizeNonEmptyString(candidate.commandPreview),
-\t\tagentId: normalizeNonEmptyString(candidate.agentId),
-\t\tsessionKey: normalizeNonEmptyString(candidate.sessionKey),
+\t\tcommandPreview: normalizeNullableString(candidate.commandPreview),
+\t\tagentId: normalizeNullableString(candidate.agentId),
+\t\tsessionKey: normalizeNullableString(candidate.sessionKey),
 \t\t...policySnapshot ? { policySnapshot } : {},
 \t\tmutableFileOperand: mutableFileOperand ?? void 0,
 \t\t...hasMicroclawIdentity ? {
@@ -235,15 +204,9 @@ export function patchPinnedOpenClawNodeGateway(source) {
   );
   patched = replaceExactlyOnce(
     patched,
-    PINNED_NODE_GATEWAY_ALLOW_ONCE_SOURCE,
-    PATCHED_NODE_GATEWAY_ALLOW_ONCE_SOURCE,
-    "node allow-once approval proof handoff",
-  );
-  patched = replaceExactlyOnce(
-    patched,
-    PINNED_NODE_GATEWAY_ALLOW_ALWAYS_SOURCE,
-    PATCHED_NODE_GATEWAY_ALLOW_ALWAYS_SOURCE,
-    "node allow-always approval proof handoff",
+    PINNED_NODE_GATEWAY_APPROVAL_SOURCE,
+    PATCHED_NODE_GATEWAY_APPROVAL_SOURCE,
+    "node approval proof handoff",
   );
   return replaceExactlyOnce(
     patched,

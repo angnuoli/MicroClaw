@@ -77,25 +77,29 @@ function fixture(target = "cloud/b") {
 afterEach(() => vi.useRealTimers());
 
 describe("default model hot selection", () => {
-  it("writes only the primary using CAS and verifies application without inference or restart", async () => {
-    const f = fixture();
-    await expect(f.select()).resolves.toEqual({ modelRef: "cloud/b" });
-    expect(f.config).toEqual({
-      ...f.before,
-      agents: {
-        ...f.before.agents,
-        defaults: {
-          ...f.before.agents.defaults,
-          model: { ...f.before.agents.defaults.model, primary: "cloud/b" },
+  it.each(["2026.9.3", "2026.10.2"])(
+    "writes only the primary using CAS on %s without inference or restart",
+    async (version) => {
+      const f = fixture();
+      f.gateway.serverVersion = version;
+      await expect(f.select()).resolves.toEqual({ modelRef: "cloud/b" });
+      expect(f.config).toEqual({
+        ...f.before,
+        agents: {
+          ...f.before.agents,
+          defaults: {
+            ...f.before.agents.defaults,
+            model: { ...f.before.agents.defaults.model, primary: "cloud/b" },
+          },
         },
-      },
-    });
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
-      "config.get",
-      "config.patch",
-      "config.get",
-    ]);
-  });
+      });
+      expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+        "config.get",
+        "config.patch",
+        "config.get",
+      ]);
+    },
+  );
 
   it("uses only the authenticated prepared Copilot catalogue, never discovery", async () => {
     const f = fixture("github-copilot/gpt-6-sol");

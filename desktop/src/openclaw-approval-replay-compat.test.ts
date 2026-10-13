@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The compatibility preload is intentionally external ESM for the Gateway child.
 import * as replayCompat from "./openclaw-approval-replay-compat.mjs";
 
@@ -11,8 +11,7 @@ const {
   APPROVAL_PROOF_CONTRACT,
   APPROVAL_PROOF_TTL_MS,
   PINNED_EXEC_APPROVAL_VALIDATION_SOURCE,
-  PINNED_NODE_GATEWAY_ALLOW_ALWAYS_SOURCE,
-  PINNED_NODE_GATEWAY_ALLOW_ONCE_SOURCE,
+  PINNED_NODE_GATEWAY_APPROVAL_SOURCE,
   PINNED_NODE_GATEWAY_ASK_FALLBACK_SOURCE,
   PINNED_NODE_GATEWAY_MINT_INSERT_SOURCE,
   PINNED_SYSTEM_RUN_PLAN_SOURCE,
@@ -46,18 +45,18 @@ describe("pinned OpenClaw package validation", () => {
     expect(() => validatePinnedOpenClawApprovalPackage(dir)).toThrow(/absolute path/);
   });
 
-  it.each(["2026.8.2", "2026.9.2", "2026.9.3-beta.1", "2026.9.4"])(
+  it.each(["2026.8.2", "2026.9.3", "2026.10.1", "2026.10.2-beta.1", "2026.10.3"])(
     "rejects an unpinned OpenClaw version: %s",
     (version) => {
       expect(() => validatePinnedOpenClawApprovalPackage(createPackage(version))).toThrow(
-        /requires OpenClaw 2026\.9\.3/,
+        /requires OpenClaw 2026\.10\.2/,
       );
     },
   );
 
-  it("rejects modified 9.3 approval bundles", () => {
-    const packageDir = createPackage("2026.9.3");
-    writeFileSync(join(packageDir, "dist", "nodes-C8-hkmi0.mjs"), "// changed");
+  it("rejects modified 10.2 approval bundles", () => {
+    const packageDir = createPackage("2026.10.2");
+    writeFileSync(join(packageDir, "dist", "nodes-CUbe_1MQ.mjs"), "// changed");
     expect(() => validatePinnedOpenClawApprovalPackage(packageDir)).toThrow(/hash mismatch/);
   });
 
@@ -66,9 +65,9 @@ describe("pinned OpenClaw package validation", () => {
     it("validates all published hashes and patch points and parses the patched bundles", () => {
       const targets = validatePinnedOpenClawApprovalPackage(publishedPackage);
       expect(targets.map((target: { module: string }) => target.module)).toEqual([
-        "nodes-C8-hkmi0.mjs",
-        "system-run-approval-binding-DMkQH3tb.mjs",
-        "exec-approval-B0MHHes6.mjs",
+        "nodes-CUbe_1MQ.mjs",
+        "system-run-approval-plan-Cu-Ftdkp.mjs",
+        "exec-approval-mGU7M4-K.mjs",
       ]);
       for (const target of targets) {
         const patched = target.patch(target.original.toString("utf8"));
@@ -126,8 +125,7 @@ assert.equal(typeof globalThis[Symbol.for("microclaw.windows-node-mxc.approval-p
 describe("pinned OpenClaw node approval proof backport", () => {
   const source = [
     PINNED_NODE_GATEWAY_MINT_INSERT_SOURCE,
-    PINNED_NODE_GATEWAY_ALLOW_ONCE_SOURCE,
-    PINNED_NODE_GATEWAY_ALLOW_ALWAYS_SOURCE,
+    PINNED_NODE_GATEWAY_APPROVAL_SOURCE,
     PINNED_NODE_GATEWAY_ASK_FALLBACK_SOURCE,
   ].join("\n");
 
@@ -137,7 +135,7 @@ describe("pinned OpenClaw node approval proof backport", () => {
     expect(patched.match(/microclawApprovalProof =/g)).toHaveLength(1);
     expect(patched).toContain("manager.consumeAllowOnce(runId)");
     expect(patched).toContain(
-      'if (snapshot.decision === "allow-always") {\n\t\treturn systemRunApprovalRequired(runId);',
+      'if (approvalDecision !== "allow-once" || recordedResolutionSource !== "operator") return systemRunApprovalRequired(runId);',
     );
     expect(patched).toContain(
       'timedOut && approvalSource === "ask-fallback" && !approved && requestedDecision === null && clientHasApprovals(opts.client)) {\n\t\treturn systemRunApprovalRequired(runId);',
@@ -147,6 +145,46 @@ describe("pinned OpenClaw node approval proof backport", () => {
     expect(patched).toContain("nodeId: targetNodeId");
     expect(patched.indexOf("consumeAllowOnce(runId)")).toBeLessThan(
       patched.indexOf("microclawApprovalProof ="),
+    );
+  });
+
+  it.each([
+    { decision: "allow-once", resolutionSource: "operator", consumed: true, allowed: true },
+    { decision: "allow-once", resolutionSource: "operator", consumed: false, allowed: false },
+    { decision: "allow-once", resolutionSource: "auto-review", consumed: true, allowed: false },
+    { decision: "allow-always", resolutionSource: "operator", consumed: true, allowed: false },
+  ])("awaits one-use consumption before minting a proof: %j", async (entry) => {
+    const patched = patchPinnedOpenClawNodeGateway(source);
+    const branch = patched.slice(
+      patched.indexOf("\tconst approvalDecision ="),
+      patched.indexOf("\tif (timedOut"),
+    );
+    const run = new Function(
+      "snapshot",
+      "recordedResolutionSource",
+      "manager",
+      "mintMicroclawNodeApprovalProof",
+      `return (async () => {
+        const approvalSource = null, next = {}, runId = "approval", targetNodeId = "node";
+        const runtimeContext = {plan: {}};
+        const systemRunApprovalRequired = () => ({ok: false});
+        const systemRunApprovalGuardError = () => ({ok: false});
+        ${branch}
+        return {ok: false};
+      })();`,
+    );
+    const consumeAllowOnce = vi.fn().mockResolvedValue(entry.consumed);
+    const mint = vi.fn().mockReturnValue("proof");
+    const result = await run(
+      { decision: entry.decision },
+      entry.resolutionSource,
+      { consumeAllowOnce },
+      mint,
+    );
+    expect(result.ok).toBe(entry.allowed);
+    expect(mint).toHaveBeenCalledTimes(entry.allowed ? 1 : 0);
+    expect(consumeAllowOnce).toHaveBeenCalledTimes(
+      entry.decision === "allow-once" && entry.resolutionSource === "operator" ? 1 : 0,
     );
   });
 
@@ -205,8 +243,7 @@ describe("pinned OpenClaw node approval proof backport", () => {
 
   it.each([
     PINNED_NODE_GATEWAY_MINT_INSERT_SOURCE,
-    PINNED_NODE_GATEWAY_ALLOW_ONCE_SOURCE,
-    PINNED_NODE_GATEWAY_ALLOW_ALWAYS_SOURCE,
+    PINNED_NODE_GATEWAY_APPROVAL_SOURCE,
     PINNED_NODE_GATEWAY_ASK_FALLBACK_SOURCE,
   ])("fails closed when a pinned source fragment drifts", (fragment) => {
     expect(() =>
@@ -218,7 +255,7 @@ describe("pinned OpenClaw node approval proof backport", () => {
 
   it("fails closed when a pinned source fragment appears more than once", () => {
     expect(() =>
-      patchPinnedOpenClawNodeGateway(`${source}\n${PINNED_NODE_GATEWAY_ALLOW_ONCE_SOURCE}`),
+      patchPinnedOpenClawNodeGateway(`${source}\n${PINNED_NODE_GATEWAY_APPROVAL_SOURCE}`),
     ).toThrow(/did not match exactly once/);
   });
 });

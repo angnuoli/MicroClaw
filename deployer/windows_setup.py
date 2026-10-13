@@ -45,6 +45,7 @@ from deployer.openclaw_upgrade import (
     prune_previous_committed_backups,
 )
 from deployer.openclaw_version import (
+    NODE_DEFAULT_MAJOR,
     NODE_ENGINE_RANGE,
     NODE_FALLBACK_VERSION,
     OPENCLAW_TARGET_VERSION,
@@ -404,7 +405,7 @@ class WindowsSetup:
     def __init__(self, config, logger: DeployerLogger):
         self.cfg = config
         self.log = logger
-        self.node_version = config.get("node.version", "26")
+        self.node_version = config.get("node.version", NODE_DEFAULT_MAJOR)
         # Re-read env var at construction time (UI may have set it)
         self.node_dir = Path(os.environ.get("OPENCLAW_NODE_DIR", str(DEFAULT_NODE_DIR)))
         self._node_bin: Path | None = None
@@ -1213,6 +1214,7 @@ class WindowsSetup:
         """
         self._select_download_mirror()
         self.log.step(f"Installing Node.js on Windows ({self._mirror_name})…")
+        existing_node_directory = self.node_dir.exists()
 
         version = self._resolve_target_node_version()
         if not _VERSION_RE.fullmatch(version) or not is_supported_node_version(version):
@@ -1319,11 +1321,17 @@ class WindowsSetup:
             ver = self._get_node_version(str(node_exe))
             if not ver or not is_supported_node_version(ver):
                 self.log.error(
-                    f"Node.js installed but verification failed; need {NODE_ENGINE_RANGE}"
+                    f"Node.js installed but verification failed: {ver!r} (need {NODE_ENGINE_RANGE})"
                 )
                 return False
 
             self.log.success(f"Node.js {ver} installed to {self.node_dir}")
+
+            # Removing an upgraded prerequisite would also delete the restored
+            # OpenClaw package when npm's prefix shares this directory.
+            if existing_node_directory:
+                self.log.info("Preserving the existing Node.js directory during upgrade rollback.")
+                return True
 
             # Record that MicroClaw owns this Node install so the uninstaller
             # knows it's safe to remove.  Without this marker, uninstall
@@ -3584,10 +3592,25 @@ class WindowsSetup:
             candidates.append(Path(sys.executable).parent / "plugins" / "openclaw-weixin")
         # Project root (development scenario)
         project_root = Path(__file__).resolve().parent.parent
-        candidates.append(project_root / "plugins" / "openclaw-weixin")
+        candidates.append(project_root / "dist" / "openclaw-weixin")
         for p in candidates:
             if p.is_dir() and (p / "package.json").exists():
-                return p
+                try:
+                    package = json.loads((p / "package.json").read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as error:
+                    self.log.warn(f"Could not read bundled Weixin metadata at {p}: {error}")
+                    continue
+                compatibility = package.get("microclaw") if isinstance(package, dict) else None
+                if (
+                    isinstance(compatibility, dict)
+                    and compatibility.get("sdkCompatibility") == OPENCLAW_TARGET_VERSION
+                    and (p / "dist" / "index.js").is_file()
+                ):
+                    return p
+                self.log.warn(
+                    f"Weixin bundle at {p} is not staged for OpenClaw {OPENCLAW_TARGET_VERSION}; "
+                    "rebuild the installer with build.ps1."
+                )
         return None
 
     @staticmethod
@@ -4018,7 +4041,9 @@ class WindowsSetup:
 
         plugin_dir = self._find_bundled_weixin_plugin()
         if not plugin_dir:
-            self.log.error("未找到插件安装包")
+            self.log.error(
+                "未找到插件安装包；从源码运行时请先运行 build.ps1 生成 dist/openclaw-weixin"
+            )
             return False
 
         state_dir = Path.home() / ".openclaw"

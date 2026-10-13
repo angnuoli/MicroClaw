@@ -60,7 +60,7 @@ MicroClaw 仅支持 **Windows 10/11**。对大多数用户来说，真正需要�
 
 从源码构建安装器后运行：
 
-> **构建前置依赖**（仅运行 `build.ps1` 时需要）：**Node.js 26.1+（推荐）** 或 **24.x 系列的 24.16+**，以及 **Python 3.10+**。OpenClaw **2026.9.3** 要求 `>=24.16.0 <25 || >=26.1.0`，不再支持 Node 22 和 25。使用 `pip install -r requirements.txt` 安装 Python 构建依赖（其中包含用于打包安装器 exe 的 PyInstaller）。终端用户运行已打包的 `MicroClawInstaller.exe` **无需** 安装 Python。
+> **构建前置依赖**（仅运行 `build.ps1` 时需要）：**Node.js 26.1+（推荐）** 或 **24.x 系列的 24.16+**，以及 **Python 3.10+**。OpenClaw **2026.10.2** 要求 `>=24.16.0 <25 || >=26.1.0`，不再支持 Node 22 和 25。使用 `pip install -r requirements.txt` 安装 Python 构建依赖（其中包含用于打包安装器 exe 的 PyInstaller）。终端用户运行已打包的 `MicroClawInstaller.exe` **无需** 安装 Python。
 
 ```powershell
 .\build.ps1                                        # 生成 dist/MicroClawInstaller/MicroClawInstaller.exe
@@ -71,12 +71,14 @@ MicroClaw 仅支持 **Windows 10/11**。对大多数用户来说，真正需要�
 
 - Git for Windows（PortableGit → `~/.openclaw-git`）
 - Node.js 26，通过官方签名 `.msi` 以 per-machine 方式安装到 `%ProgramFiles%\nodejs\`（UAC 提权；若该路径已存在受支持的系统 Node 则直接复用；支持范围为 `>=24.16.0 <25 || >=26.1.0`，下载回退版本为 `26.1.0`）
-- OpenClaw Gateway（`npm install -g openclaw`）
+- OpenClaw Gateway，默认 `stable` 通道固定为 **2026.10.2**（`npm install -g openclaw@2026.10.2`）
 - 配置 npm 镜像源与 V8 编译缓存
-- 安装 MicroClaw 桌面客户端、托管技能、AppContainer 沙箱、微信插件
+- 安装 MicroClaw 桌面客户端、托管技能及 Windows 沙箱组件；微信插件不随安装包捆绑，也不会自动安装
 - 添加 Windows Defender 排除项，创建桌面快捷方式（含一键卸载）
 
 安装完成后，从开始菜单或桌面快捷方式启动 **MicroClaw**。桌面应用会自动拉起 Gateway。
+
+升级已有安装时，请重新运行 MicroClaw 安装器，继续使用事务备份、验证和失败回滚流程；旧版依赖脚本会拒绝直接覆盖升级 OpenClaw。旧配置中的 Node 22/23/25 会迁移到受支持的版本线。升级回滚会保留更新后的既有 Node 目录，避免连同已恢复的 OpenClaw 包一起删除。`stable` 是精确版本锁定，不会随 npm 的 `latest` 自动变化。
 
 ### 2. 只补上你的模型配置
 

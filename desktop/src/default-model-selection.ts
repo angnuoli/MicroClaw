@@ -3,7 +3,7 @@ import {
   parseGitHubCopilotGatewayAuthStatus,
   parseGitHubCopilotGatewayModels,
 } from "./github-copilot-auth";
-import { supportsLocalModelVersion, type LocalModelGateway } from "./local-model-service";
+import { supportsLocalModelGatewayVersion, type LocalModelGateway } from "./local-model-service";
 import {
   assertModelConfigUnchanged,
   getPrimaryModel,
@@ -59,8 +59,8 @@ export async function selectDefaultModel(
   deps.assertMutable();
   assertModelConfigUnchanged(params.expectedConfig, deps.readConfig());
   const gateway = deps.gateway();
-  if (!gateway?.connected || !supportsLocalModelVersion(gateway.serverVersion))
-    throw new Error("Default model selection requires a connected OpenClaw 2026.9.3 Gateway");
+  if (!gateway?.connected || !supportsLocalModelGatewayVersion(gateway.serverVersion))
+    throw new Error("Default model selection requires a connected, supported OpenClaw Gateway");
   for (const method of ["config.get", "config.patch"]) {
     if (!gateway.methods.includes(method)) throw new Error(`Gateway does not support ${method}`);
   }

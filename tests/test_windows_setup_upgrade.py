@@ -272,9 +272,41 @@ class WindowsSetupUpgradeTests(unittest.TestCase):
         self.assertIsNotNone(process.returncode)
 
     def test_other_version_requires_upgrade(self):
-        self._write_package(self.home / ".openclaw-node", "2026.3.12")
+        self._write_package(self.home / ".openclaw-node", "2026.7.1-1")
 
         self.assertFalse(self.ws.check_openclaw_windows())
+
+    def test_source_installer_requires_compatible_staged_weixin_runtime(self):
+        project = self.root / "project"
+        source = project / "plugins" / "openclaw-weixin"
+        self._write_weixin_payload(source)
+        staged = project / "dist" / "openclaw-weixin"
+        with unittest.mock.patch(
+            "deployer.windows_setup.__file__", str(project / "deployer" / "windows_setup.py")
+        ):
+            self.assertIsNone(self.ws._find_bundled_weixin_plugin())
+            self._write_weixin_payload(staged)
+            self.assertIsNone(self.ws._find_bundled_weixin_plugin())
+            package = {
+                "version": "2.4.6",
+                "microclaw": {"sdkCompatibility": OPENCLAW_TARGET_VERSION},
+            }
+            (staged / "package.json").write_text(json.dumps(package), encoding="utf-8")
+            self.assertEqual(self.ws._find_bundled_weixin_plugin(), staged)
+            (staged / "dist" / "index.js").unlink()
+            self.assertIsNone(self.ws._find_bundled_weixin_plugin())
+
+    def test_source_installer_rejects_malformed_weixin_metadata(self):
+        project = self.root / "project"
+        staged = project / "dist" / "openclaw-weixin"
+        staged.mkdir(parents=True)
+        with unittest.mock.patch(
+            "deployer.windows_setup.__file__", str(project / "deployer" / "windows_setup.py")
+        ):
+            for content in ("not json", "[]", '{"microclaw": "invalid"}'):
+                with self.subTest(content=content):
+                    (staged / "package.json").write_text(content, encoding="utf-8")
+                    self.assertIsNone(self.ws._find_bundled_weixin_plugin())
 
     def test_detection_matches_desktop_search_order_and_tracks_all_shims(self):
         legacy_prefix = self.home / ".openclaw-node"
@@ -768,6 +800,41 @@ class WindowsSetupUpgradeTests(unittest.TestCase):
             self.assertFalse(
                 self.ws._download_git_installer("2.53.0", "PortableGit.7z.exe", dl_path)
             )
+
+    def test_node_upgrade_does_not_claim_or_delete_existing_installation(self):
+        self._write_package(self.ws.node_dir, "2026.7.1-1")
+        (self.ws.node_dir / "node.exe").write_bytes(b"old Node")
+        self._mock_successful_node_install()
+
+        self.assertTrue(self.ws.install_node_windows())
+
+        self.ws._mark_node_owned_by_microclaw.assert_not_called()
+        self.assertEqual(self.ws._rollback_actions, [])
+        self.assertTrue((self.ws.node_dir / "node_modules" / "openclaw").is_dir())
+
+    def test_new_node_installation_is_owned_and_has_rollback(self):
+        self._mock_successful_node_install()
+
+        self.assertTrue(self.ws.install_node_windows())
+
+        self.ws._mark_node_owned_by_microclaw.assert_called_once_with(self.ws.node_dir)
+        self.assertEqual(len(self.ws._rollback_actions), 1)
+
+    def _mock_successful_node_install(self):
+        self.ws._mirror_name = MIRROR_OFFICIAL
+        self.ws._select_download_mirror = unittest.mock.Mock()
+        self.ws._resolve_target_node_version = lambda: NODE_FALLBACK_VERSION
+        self.ws._download_and_verify_node_msi = lambda _version, _path: True
+        self.ws._get_arch = lambda: "x64"
+        self.ws._get_node_version = lambda _path: f"v{NODE_FALLBACK_VERSION}"
+        self.ws._mark_node_owned_by_microclaw = unittest.mock.Mock()
+
+        def install(_cmd, **_kwargs):
+            self.ws.node_dir.mkdir(parents=True, exist_ok=True)
+            (self.ws.node_dir / "node.exe").write_bytes(b"new Node")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self.ws._run = install
 
     def test_resolve_target_node_version_bumps_to_installed_major(self):
         # The MSI refuses to install an older major over an existing newer one.

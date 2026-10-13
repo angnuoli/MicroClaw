@@ -5,7 +5,11 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from deployer.openclaw_version import OPENCLAW_TARGET_VERSION, is_supported_node_version
+from deployer.openclaw_version import (
+    NODE_FALLBACK_VERSION,
+    OPENCLAW_TARGET_VERSION,
+    is_supported_node_version,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
@@ -23,9 +27,8 @@ class RuntimeGateTests(unittest.TestCase):
         script = (ROOT / "scripts" / "windows" / "setup-dependencies.ps1").read_text(
             encoding="utf-8"
         )
-
-        self.assertIn('[string]$OpenClawTag = "2026.9.3"', script)
-        self.assertIn('$nodeVersion = "26.1.0"', script)
+        self.assertIn(f'[string]$OpenClawTag = "{OPENCLAW_TARGET_VERSION}"', script)
+        self.assertIn(f'$nodeVersion = "{NODE_FALLBACK_VERSION}"', script)
         self.assertIn(r'. "$PSScriptRoot\node-runtime.ps1"', script)
         self.assertIn("Test-SupportedNodeVersion $v", script)
         self.assertIn("Test-SupportedNodeVersion $ver", script)
@@ -97,24 +100,21 @@ class RuntimeGateTests(unittest.TestCase):
         script = (ROOT / "scripts" / "windows" / "setup-dependencies.ps1").read_text(
             encoding="utf-8"
         )
-
         self.assertIn("requires transactional upgrade", script)
         self.assertIn("Run the MicroClaw installer", script)
 
     def test_ci_enforces_openclaw_node_range_in_both_jobs(self):
         workflow = (ROOT / ".github" / "workflows" / "pr-build.yml").read_text(encoding="utf-8")
-
         self.assertEqual(workflow.count(r". .\scripts\windows\node-runtime.ps1"), 2)
         self.assertEqual(workflow.count("Test-SupportedNodeVersion $node"), 2)
-        self.assertGreaterEqual(workflow.count("is unsupported by OpenClaw 2026.9.3"), 2)
+        self.assertEqual(workflow.count(f"is unsupported by OpenClaw {OPENCLAW_TARGET_VERSION}"), 2)
 
     def test_release_enforces_openclaw_node_range(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-
         self.assertIn('node-version: "26"', workflow)
         self.assertIn(r". .\scripts\windows\node-runtime.ps1", workflow)
         self.assertIn("Test-SupportedNodeVersion $node", workflow)
-        self.assertIn("is unsupported by OpenClaw 2026.9.3", workflow)
+        self.assertIn(f"is unsupported by OpenClaw {OPENCLAW_TARGET_VERSION}", workflow)
 
     def test_security_workflow_uses_recommended_node(self):
         workflow = (ROOT / ".github" / "workflows" / "pr-security-check.yml").read_text(
@@ -124,23 +124,17 @@ class RuntimeGateTests(unittest.TestCase):
 
     def test_ci_runs_python_unit_tests(self):
         workflow = (ROOT / ".github" / "workflows" / "pr-build.yml").read_text(encoding="utf-8")
-
         self.assertIn("python -m unittest discover -s tests -v", workflow)
 
     def test_build_uses_uv_only_for_a_real_uv_project(self):
         build_script = (ROOT / "build.ps1").read_text(encoding="utf-8")
-
         self.assertIn("$hasUvProject", build_script)
         self.assertIn("if ($hasUvProject)", build_script)
-        self.assertIn(
-            'python -m pip install -r "$root\\requirements.txt"',
-            build_script,
-        )
+        self.assertIn('python -m pip install -r "$root\\requirements.txt"', build_script)
         self.assertIn("$pipExitCode = $LASTEXITCODE", build_script)
 
     def test_installer_spec_excludes_weixin_runtime(self):
         spec = (ROOT / "MicroClawDeployer.spec").read_text(encoding="utf-8")
-
         self.assertNotIn("weixin_plugin_datas", spec)
         self.assertNotIn("plugins/openclaw-weixin", spec)
         self.assertNotIn("collect_plugin_files", spec)
@@ -148,7 +142,6 @@ class RuntimeGateTests(unittest.TestCase):
 
     def test_build_does_not_stage_weixin_archives(self):
         build_script = (ROOT / "build.ps1").read_text(encoding="utf-8")
-
         for archive in (
             "tencent-weixin-openclaw-weixin-2.4.6.tgz",
             "zod-4.4.3.tgz",
@@ -156,10 +149,10 @@ class RuntimeGateTests(unittest.TestCase):
         ):
             self.assertNotIn(archive, build_script)
         self.assertNotIn("Stage Weixin plugin", build_script)
+        self.assertNotIn("stage-weixin-runtime.mjs", build_script)
 
     def test_nsis_build_declares_utf8_input_charset(self):
         build_script = (ROOT / "build.ps1").read_text(encoding="utf-8")
-
         self.assertIn('"/INPUTCHARSET"', build_script)
         self.assertIn('"UTF8"', build_script)
 
