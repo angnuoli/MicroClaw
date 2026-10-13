@@ -36,6 +36,8 @@ from deployer.openclaw_upgrade import (
     prune_previous_committed_backups,
 )
 from deployer.openclaw_version import (
+    NODE_DEFAULT_MAJOR,
+    NODE_ENGINE_RANGE,
     NODE_FALLBACK_VERSION,
     OPENCLAW_TARGET_VERSION,
     is_supported_node_version,
@@ -385,7 +387,7 @@ class WindowsSetup:
     def __init__(self, config, logger: DeployerLogger):
         self.cfg = config
         self.log = logger
-        self.node_version = config.get("node.version", "22")
+        self.node_version = config.get("node.version", NODE_DEFAULT_MAJOR)
         # Re-read env var at construction time (UI may have set it)
         self.node_dir = Path(os.environ.get("OPENCLAW_NODE_DIR", str(DEFAULT_NODE_DIR)))
         self._node_bin: Path | None = None
@@ -920,7 +922,7 @@ class WindowsSetup:
         return False
 
     def _resolve_latest_version(self, major: str) -> str:
-        """Resolve '22' to the latest specific version like '22.14.0'."""
+        """Resolve a major line such as '24' to its latest specific version."""
         self.log.debug(f"Resolving latest Node.js {major}.x version…")
         import json
         import re
@@ -991,7 +993,7 @@ class WindowsSetup:
             elif ver:
                 self.log.info(
                     "Managed Node.js "
-                    f"{ver} is outdated (need >=22.22.3, <23 / >=24.15.0, <25 / >=25.9.0), "
+                    f"{ver} is unsupported (need {NODE_ENGINE_RANGE}), "
                     "will reinstall"
                 )
 
@@ -1062,7 +1064,7 @@ class WindowsSetup:
         """Resolve the Node.js version to install, never downgrading.
 
         Starts from the configured target line (``self.node_version``, default
-        ``22``) but bumps up to the major of any already-installed Node when
+        ``24``) but bumps up to the major of any already-installed Node when
         that is higher, so the per-machine MSI performs an upgrade rather than
         a blocked downgrade.
         """
@@ -1078,8 +1080,30 @@ class WindowsSetup:
                 "to install an older version over a newer one."
             )
             target_line = str(installed_major)
+            target_major = installed_major
 
-        return self._resolve_latest_version(target_line)
+        supported_major = max(target_major, int(NODE_DEFAULT_MAJOR))
+        if supported_major == 25:
+            supported_major = 26
+        if supported_major != target_major:
+            self.log.warn(
+                f"Node.js {target_line}.x is unsupported by OpenClaw {OPENCLAW_TARGET_VERSION}; "
+                f"targeting {supported_major}.x instead."
+            )
+            target_line = str(supported_major)
+
+        version = self._resolve_latest_version(target_line)
+        if (
+            installed_major is not None
+            and _VERSION_RE.fullmatch(version)
+            and int(version.split(".")[0]) < installed_major
+        ):
+            raise NodeInstallBlocked(
+                f"Could not resolve a supported Node.js release at or above the installed "
+                f"{installed_major}.x line; refusing to downgrade to {version}. "
+                "Check network access to the Node.js version index and retry."
+            )
+        return version
 
     def install_node_windows(self) -> bool:
         """Download and install Node.js on Windows via the official signed MSI.
@@ -1091,10 +1115,17 @@ class WindowsSetup:
         produced on some configurations.
         """
         self.log.step(f"Installing Node.js on Windows ({self._mirror_name})…")
+        existing_node_directory = self.node_dir.exists()
 
         version = self._resolve_target_node_version()
         if not _VERSION_RE.match(version):
             self.log.error(f"Invalid resolved version: {version!r}")
+            return False
+        if not is_supported_node_version(version):
+            self.log.error(
+                f"Resolved Node.js {version} is unsupported by OpenClaw "
+                f"{OPENCLAW_TARGET_VERSION} (need {NODE_ENGINE_RANGE})"
+            )
             return False
         self.log.info(f"Resolved version: v{version}")
 
@@ -1193,11 +1224,19 @@ class WindowsSetup:
             self._node_bin = self.node_dir
 
             ver = self._get_node_version(str(node_exe))
-            if not ver:
-                self.log.error("Node.js installed but verification failed")
+            if not ver or not is_supported_node_version(ver):
+                self.log.error(
+                    f"Node.js installed but verification failed: {ver!r} (need {NODE_ENGINE_RANGE})"
+                )
                 return False
 
             self.log.success(f"Node.js {ver} installed to {self.node_dir}")
+
+            # Removing an upgraded prerequisite would also delete the restored
+            # OpenClaw package when npm's prefix shares this directory.
+            if existing_node_directory:
+                self.log.info("Preserving the existing Node.js directory during upgrade rollback.")
+                return True
 
             # Record that MicroClaw owns this Node install so the uninstaller
             # knows it's safe to remove.  Without this marker, uninstall
@@ -3353,10 +3392,25 @@ class WindowsSetup:
             candidates.append(Path(sys.executable).parent / "plugins" / "openclaw-weixin")
         # Project root (development scenario)
         project_root = Path(__file__).resolve().parent.parent
-        candidates.append(project_root / "plugins" / "openclaw-weixin")
+        candidates.append(project_root / "dist" / "openclaw-weixin")
         for p in candidates:
             if p.is_dir() and (p / "package.json").exists():
-                return p
+                try:
+                    package = json.loads((p / "package.json").read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as error:
+                    self.log.warn(f"Could not read bundled Weixin metadata at {p}: {error}")
+                    continue
+                compatibility = package.get("microclaw") if isinstance(package, dict) else None
+                if (
+                    isinstance(compatibility, dict)
+                    and compatibility.get("sdkCompatibility") == OPENCLAW_TARGET_VERSION
+                    and (p / "dist" / "index.js").is_file()
+                ):
+                    return p
+                self.log.warn(
+                    f"Weixin bundle at {p} is not staged for OpenClaw {OPENCLAW_TARGET_VERSION}; "
+                    "rebuild the installer with build.ps1."
+                )
         return None
 
     @staticmethod
@@ -3574,7 +3628,9 @@ class WindowsSetup:
 
         plugin_dir = self._find_bundled_weixin_plugin()
         if not plugin_dir:
-            self.log.error("未找到插件安装包")
+            self.log.error(
+                "未找到插件安装包；从源码运行时请先运行 build.ps1 生成 dist/openclaw-weixin"
+            )
             return False
 
         state_dir = Path.home() / ".openclaw"

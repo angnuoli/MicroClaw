@@ -46,7 +46,7 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additio
 ### Development Setup
 
 1. Clone the repository
-2. Install Node.js 22+
+2. Install Node.js 24.16+ (24.x) or 26.1+
 3. Install dependencies:
    ```bash
    cd desktop && npm install

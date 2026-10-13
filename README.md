@@ -114,7 +114,7 @@ MicroClaw targets **Windows 10/11**. For most users, the only thing you need to 
 
 Build the installer from source, then run it:
 
-> **Build prerequisites** (only needed to run `build.ps1`): **Node.js 22+** and **Python 3.10+**. Install the Python build dependencies with `pip install -r requirements.txt` (this includes PyInstaller, used to package the installer exe). End users running the packaged `MicroClawInstaller.exe` do **not** need Python.
+> **Build prerequisites** (only needed to run `build.ps1`): **Node.js 24.16+ (24.x) or 26.1+** and **Python 3.10+**. Install the Python build dependencies with `pip install -r requirements.txt` (this includes PyInstaller, used to package the installer exe). End users running the packaged `MicroClawInstaller.exe` do **not** need Python.
 
 ```powershell
 .\build.ps1                                        # produces dist/MicroClawInstaller/MicroClawInstaller.exe
@@ -124,13 +124,15 @@ Build the installer from source, then run it:
 The installer handles the Windows-side setup in a single run:
 
 - Git for Windows (PortableGit → `~/.openclaw-git`)
-- Node.js 22+ via the official signed `.msi` (per-machine install to `%ProgramFiles%\nodejs\`, UAC-elevated; an existing system Node ≥22.16 at that path is reused as-is)
-- OpenClaw Gateway (`npm install -g openclaw`)
+- Node.js 24.x via the official signed `.msi` (per-machine install to `%ProgramFiles%\nodejs\`, UAC-elevated; an existing standard-path Node satisfying `>=24.16.0 <25 || >=26.1.0` is reused)
+- OpenClaw Gateway, pinned to **2026.10.2** on the default `stable` channel (`npm install -g openclaw@2026.10.2`)
 - Configures the npm registry mirror and V8 compile cache
 - Installs the MicroClaw desktop client, managed skills, AppContainer sandbox, WeChat plugin
 - Adds Windows Defender exclusions, creates desktop shortcuts (including one-click Uninstall)
 
 After install, launch **MicroClaw** from the Start menu or the desktop shortcut. The desktop app auto-starts the Gateway.
+
+To upgrade an existing installation, rerun the MicroClaw installer. It preserves the transactional backup, validation, and rollback flow; the legacy dependency helper refuses in-place OpenClaw upgrades. Old Node 22/23/25 configurations are advanced to a supported line. Upgrade rollback keeps the updated, pre-existing Node directory instead of deleting it and any restored OpenClaw package it contains. `stable` is an exact version pin, not npm's moving `latest` tag.
 
 ### 2. Add your model credentials
 
@@ -276,7 +278,7 @@ This script sequentially:
 
 ### Prerequisites
 
-- Node.js 22+
+- Node.js 24.16+ (24.x) or 26.1+
 - Python 3.10+ — install build deps with `pip install -r requirements.txt` (includes PyInstaller)
 - .NET 9 SDK (for the AppContainer launcher)
 - npm dependencies installed (`cd desktop && npm install`)

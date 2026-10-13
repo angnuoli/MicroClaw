@@ -42,7 +42,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Toolchain (Node 22) is pre-installed on the self-hosted runner.
+      # A supported Node.js toolchain is pre-installed on the self-hosted runner.
       # actions/setup-node is unreliable under the NetworkService account
       # (HKLM/tool-cache permission issues), so just verify the version.
       - name: Verify pre-installed Node.js
@@ -51,10 +51,9 @@ jobs:
           $node = (& node --version).TrimStart('v')
           $parsed = [version]$node
           $supported =
-            ($parsed.Major -eq 22 -and $parsed -ge [version]'22.22.3') -or
-            ($parsed.Major -eq 24 -and $parsed -ge [version]'24.15.0') -or
-            ($parsed.Major -ge 25 -and $parsed -ge [version]'25.9.0')
-          if (-not $supported) { throw "Node $node is unsupported by OpenClaw 2026.7.1-1" }
+            ($parsed.Major -eq 24 -and $parsed -ge [version]'24.16.0') -or
+            ($parsed.Major -ge 26 -and $parsed -ge [version]'26.1.0')
+          if (-not $supported) { throw "Node $node is unsupported by OpenClaw 2026.10.2" }
           Write-Host "node $node"
 
       - name: Install dependencies (all packages)
@@ -135,7 +134,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Toolchain (Node 22, .NET 9 SDK, Python 3.12+) is pre-installed on
+      # Toolchain (supported Node.js, .NET 9 SDK, Python 3.12+) is pre-installed on
       # the self-hosted runner. We only verify versions here; installing
       # via actions/setup-* is unreliable under the NetworkService account
       # (HKLM/tool-cache permission issues).
@@ -145,10 +144,9 @@ jobs:
           $node = (& node --version).TrimStart('v')
           $parsed = [version]$node
           $supported =
-            ($parsed.Major -eq 22 -and $parsed -ge [version]'22.22.3') -or
-            ($parsed.Major -eq 24 -and $parsed -ge [version]'24.15.0') -or
-            ($parsed.Major -ge 25 -and $parsed -ge [version]'25.9.0')
-          if (-not $supported) { throw "Node $node is unsupported by OpenClaw 2026.7.1-1" }
+            ($parsed.Major -eq 24 -and $parsed -ge [version]'24.16.0') -or
+            ($parsed.Major -ge 26 -and $parsed -ge [version]'26.1.0')
+          if (-not $supported) { throw "Node $node is unsupported by OpenClaw 2026.10.2" }
           Write-Host "node $node"
           $dotnet = & dotnet --version
           if ([version]($dotnet -split '-')[0] -lt [version]'9.0') { throw "dotnet $dotnet < 9.0" }

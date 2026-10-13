@@ -5,7 +5,7 @@
 .DESCRIPTION
     此脚本安装 MicroClaw 桌面客户端所需的核心第三方依赖：
       1. Git for Windows (PortableGit)
-      2. Node.js v22+ (from npmmirror)
+      2. Node.js v24.16+ (24.x) or v26.1+ (from npmmirror)
       3. npm 镜像源配置
       4. OpenClaw Gateway (npm install -g)
       5. V8 编译缓存预热
@@ -24,7 +24,7 @@
     跳过 Git 安装
 
 .PARAMETER OpenClawTag
-    OpenClaw npm 安装 tag (默认: 2026.7.1-1)
+    OpenClaw npm 安装 tag (默认: 2026.10.2)
 
 .EXAMPLE
     .\setup-dependencies.ps1
@@ -37,7 +37,7 @@ param(
     [ValidateSet("npmmirror", "tencent")]
     [string]$Mirror = "npmmirror",
     [switch]$SkipGit,
-    [string]$OpenClawTag = "2026.7.1-1"
+    [string]$OpenClawTag = "2026.10.2"
 )
 
 Set-StrictMode -Version Latest
@@ -77,10 +77,8 @@ function Test-SupportedNodeVersion {
     } catch {
         return $false
     }
-    if ($parsed.Major -eq 22) { return $parsed -ge [version]"22.22.3" }
-    if ($parsed.Major -eq 23) { return $false }
-    if ($parsed.Major -eq 24) { return $parsed -ge [version]"24.15.0" }
-    if ($parsed.Major -ge 25) { return $parsed -ge [version]"25.9.0" }
+    if ($parsed.Major -eq 24) { return $parsed -ge [version]"24.16.0" }
+    if ($parsed.Major -ge 26) { return $parsed -ge [version]"26.1.0" }
     return $false
 }
 
@@ -254,13 +252,13 @@ if ($needInstall) {
     Write-Step "Installing Node.js ($Mirror)..."
     $arch = Get-Arch
 
-    # Resolve latest Node.js 22.x version
-    $nodeVersion = "22.22.3"
+    # Resolve latest supported Node.js 24.x version
+    $nodeVersion = "24.16.0"
     try {
         $versionIndex = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" -TimeoutSec 15 -UseBasicParsing
         foreach ($entry in $versionIndex) {
             $v = $entry.version -replace '^v',''
-            if ($v -match '^22\.') {
+            if ($v -match '^24\.' -and (Test-SupportedNodeVersion $v)) {
                 $nodeVersion = $v
                 break
             }

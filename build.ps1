@@ -10,7 +10,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Prefer Node 22 from the standard per-user MSI install location, falling back
+# Prefer Node from the standard MSI install locations, falling back
 # to the legacy zip-extract path and finally the system Node.
 $nodeCandidates = @(
     "$env:ProgramFiles\nodejs",
@@ -42,7 +42,7 @@ if (-not $nodeFound) {
     Write-Host "  ERROR: node.exe not found in any of:" -ForegroundColor Red
     foreach ($candidate in $nodeCandidates) { Write-Host "    - $candidate" -ForegroundColor Red }
     Write-Host "    - PATH (Get-Command node.exe)" -ForegroundColor Red
-    Write-Host "  Install Node.js 22+ (https://nodejs.org/) and re-run build.ps1." -ForegroundColor Red
+    Write-Host "  Install Node.js 24.16+ (24.x) or 26.1+ (https://nodejs.org/) and re-run build.ps1." -ForegroundColor Red
     exit 1
 }
 
@@ -245,6 +245,13 @@ try {
     if (Test-Path $weixinInstallRoot) {
         Remove-Item $weixinInstallRoot -Recurse -Force
     }
+}
+
+# Compile the maintained source over the verified upstream runtime so SDK
+# compatibility changes reach both TypeScript and precompiled plugin entry points.
+& node "$root\desktop\scripts\stage-weixin-runtime.mjs" $weixinStage
+if ($LASTEXITCODE -ne 0) {
+    throw "Weixin SDK compatibility staging failed"
 }
 
 # The staged package is runtime-only. Removing devDependencies avoids pulling a

@@ -1,18 +1,15 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
-import {
-  resolveSenderCommandAuthorizationWithRuntime,
-  resolveDirectDmAuthorizationOutcome,
-} from "openclaw/plugin-sdk/command-auth";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 
 import { sendTyping } from "../api/api.js";
 import type { WeixinMessage } from "../api/types.js";
 import { MessageItemType, TypingStatus } from "../api/types.js";
 import { loadWeixinAccount } from "../auth/accounts.js";
+import { resolveWeixinCommandAuthorization } from "../auth/authorization.js";
 import { readFrameworkAllowFromList } from "../auth/pairing.js";
 import { downloadRemoteImageToTemp } from "../cdn/upload.js";
 import { resolveReplyProgressMessagesEnabled } from "../config/reply-progress.js";
@@ -171,35 +168,21 @@ export async function processOneMessage(
 
   const senderId = full.from_user_id ?? "";
 
-  const { senderAllowedForCommands, commandAuthorized } =
-    await resolveSenderCommandAuthorizationWithRuntime({
-      cfg: deps.config,
-      rawBody,
-      isGroup: false,
-      dmPolicy: "pairing",
-      configuredAllowFrom: [],
-      configuredGroupAllowFrom: [],
-      senderId,
-      isSenderAllowed: (id: string, list: string[]) => list.length === 0 || list.includes(id),
-      /** Pairing: framework credentials `*-allowFrom.json`, with account `userId` fallback for legacy installs. */
-      readAllowFromStore: async () => {
-        const fromStore = readFrameworkAllowFromList(deps.accountId);
-        if (fromStore.length > 0) return fromStore;
-        const uid = loadWeixinAccount(deps.accountId)?.userId?.trim();
-        return uid ? [uid] : [];
-      },
-      runtime: deps.channelRuntime.commands,
-    });
+  const fromStore = readFrameworkAllowFromList(deps.accountId);
+  const legacyUserId = fromStore.length === 0
+    ? loadWeixinAccount(deps.accountId)?.userId?.trim()
+    : undefined;
+  const allowFrom = fromStore.length > 0 ? fromStore : legacyUserId ? [legacyUserId] : [];
+  const { senderAllowedForCommands, commandAuthorized } = resolveWeixinCommandAuthorization(
+    deps.config,
+    rawBody,
+    senderId,
+    allowFrom,
+  );
 
-  const directDmOutcome = resolveDirectDmAuthorizationOutcome({
-    isGroup: false,
-    dmPolicy: "pairing",
-    senderAllowedForCommands,
-  });
-
-  if (directDmOutcome === "disabled" || directDmOutcome === "unauthorized") {
+  if (!senderAllowedForCommands) {
     logger.info(
-      `authorization: dropping message from=${senderId} outcome=${directDmOutcome}`,
+      `authorization: dropping message from=${senderId} outcome=unauthorized`,
     );
     return;
   }

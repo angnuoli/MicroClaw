@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from deployer.openclaw_upgrade import UpgradeBackupMode, UpgradePhase
-from deployer.openclaw_version import OPENCLAW_TARGET_VERSION
+from deployer.openclaw_version import NODE_FALLBACK_VERSION, OPENCLAW_TARGET_VERSION
 from deployer.uninstaller_bundle import UninstallerBundleError
 from deployer.windows_setup import (
     _OPENCLAW_RPC_TIMEOUT,
@@ -178,9 +178,41 @@ class WindowsSetupUpgradeTests(unittest.TestCase):
         self.assertIsNotNone(process.returncode)
 
     def test_other_version_requires_upgrade(self):
-        self._write_package(self.home / ".openclaw-node", "2026.3.12")
+        self._write_package(self.home / ".openclaw-node", "2026.7.1-1")
 
         self.assertFalse(self.ws.check_openclaw_windows())
+
+    def test_source_installer_requires_compatible_staged_weixin_runtime(self):
+        project = self.root / "project"
+        source = project / "plugins" / "openclaw-weixin"
+        self._write_weixin_payload(source)
+        staged = project / "dist" / "openclaw-weixin"
+        with unittest.mock.patch(
+            "deployer.windows_setup.__file__", str(project / "deployer" / "windows_setup.py")
+        ):
+            self.assertIsNone(self.ws._find_bundled_weixin_plugin())
+            self._write_weixin_payload(staged)
+            self.assertIsNone(self.ws._find_bundled_weixin_plugin())
+            package = {
+                "version": "2.4.6",
+                "microclaw": {"sdkCompatibility": OPENCLAW_TARGET_VERSION},
+            }
+            (staged / "package.json").write_text(json.dumps(package), encoding="utf-8")
+            self.assertEqual(self.ws._find_bundled_weixin_plugin(), staged)
+            (staged / "dist" / "index.js").unlink()
+            self.assertIsNone(self.ws._find_bundled_weixin_plugin())
+
+    def test_source_installer_rejects_malformed_weixin_metadata(self):
+        project = self.root / "project"
+        staged = project / "dist" / "openclaw-weixin"
+        staged.mkdir(parents=True)
+        with unittest.mock.patch(
+            "deployer.windows_setup.__file__", str(project / "deployer" / "windows_setup.py")
+        ):
+            for content in ("not json", "[]", '{"microclaw": "invalid"}'):
+                with self.subTest(content=content):
+                    (staged / "package.json").write_text(content, encoding="utf-8")
+                    self.assertIsNone(self.ws._find_bundled_weixin_plugin())
 
     def test_detection_matches_desktop_search_order_and_tracks_all_shims(self):
         legacy_prefix = self.home / ".openclaw-node"
@@ -619,26 +651,95 @@ class WindowsSetupUpgradeTests(unittest.TestCase):
             )
 
     def test_resolve_target_node_version_bumps_to_installed_major(self):
-        # An already-installed newer Node (e.g. 24.x) must not be downgraded to
-        # the default 22.x line — the MSI refuses to install an older version.
-        self.ws.node_version = "22"
-        self.ws._installed_node_major = lambda: 24
+        # The MSI refuses to downgrade an already-installed newer major.
+        self.ws.node_version = "24"
+        self.ws._installed_node_major = lambda: 26
         self.ws._resolve_latest_version = lambda major: {
-            "22": "22.23.1",
-            "24": "24.15.0",
+            "24": "24.18.0",
+            "26": "26.1.0",
         }[major]
 
-        self.assertEqual(self.ws._resolve_target_node_version(), "24.15.0")
+        self.assertEqual(self.ws._resolve_target_node_version(), "26.1.0")
 
     def test_resolve_target_node_version_keeps_default_when_no_newer(self):
-        self.ws.node_version = "22"
-        self.ws._resolve_latest_version = lambda major: "22.23.1" if major == "22" else "wrong"
+        self.ws.node_version = "24"
+        self.ws._resolve_latest_version = lambda major: "24.18.0" if major == "24" else "wrong"
 
         self.ws._installed_node_major = lambda: None
-        self.assertEqual(self.ws._resolve_target_node_version(), "22.23.1")
+        self.assertEqual(self.ws._resolve_target_node_version(), "24.18.0")
 
         self.ws._installed_node_major = lambda: 20
-        self.assertEqual(self.ws._resolve_target_node_version(), "22.23.1")
+        self.assertEqual(self.ws._resolve_target_node_version(), "24.18.0")
+
+    def test_resolve_target_node_version_migrates_unsupported_config(self):
+        for configured, expected in (("22", "24"), ("23", "24"), ("25", "26")):
+            with self.subTest(configured=configured):
+                self.ws.node_version = configured
+                self.ws._installed_node_major = lambda: None
+                self.ws._resolve_latest_version = unittest.mock.Mock(
+                    return_value=f"{expected}.18.0"
+                )
+                self.assertEqual(self.ws._resolve_target_node_version(), f"{expected}.18.0")
+                self.ws._resolve_latest_version.assert_called_once_with(expected)
+
+    def test_resolve_target_node_version_skips_installed_node_25(self):
+        self.ws.node_version = "24"
+        self.ws._installed_node_major = lambda: 25
+        self.ws._resolve_latest_version = unittest.mock.Mock(return_value="26.1.0")
+
+        self.assertEqual(self.ws._resolve_target_node_version(), "26.1.0")
+        self.ws._resolve_latest_version.assert_called_once_with("26")
+
+    def test_resolve_target_node_version_refuses_fallback_downgrade(self):
+        self.ws.node_version = "24"
+        self.ws._installed_node_major = lambda: 26
+        self.ws._resolve_latest_version = lambda _major: NODE_FALLBACK_VERSION
+
+        with self.assertRaisesRegex(NodeInstallBlocked, "refusing to downgrade"):
+            self.ws._resolve_target_node_version()
+
+    def test_install_node_rejects_unsupported_resolved_version_before_download(self):
+        self.ws._mirror_name = MIRROR_OFFICIAL
+        self.ws._download_and_verify_node_msi = unittest.mock.Mock()
+        for version in ("22.23.1", "24.15.0", "25.9.0", "26.0.0"):
+            with self.subTest(version=version):
+                self.ws._resolve_target_node_version = unittest.mock.Mock(return_value=version)
+                self.assertFalse(self.ws.install_node_windows())
+        self.ws._download_and_verify_node_msi.assert_not_called()
+
+    def test_node_upgrade_does_not_claim_or_delete_existing_installation(self):
+        self._write_package(self.ws.node_dir, "2026.7.1-1")
+        (self.ws.node_dir / "node.exe").write_bytes(b"old Node")
+        self._mock_successful_node_install()
+
+        self.assertTrue(self.ws.install_node_windows())
+
+        self.ws._mark_node_owned_by_microclaw.assert_not_called()
+        self.assertEqual(self.ws._rollback_actions, [])
+        self.assertTrue((self.ws.node_dir / "node_modules" / "openclaw").is_dir())
+
+    def test_new_node_installation_is_owned_and_has_rollback(self):
+        self._mock_successful_node_install()
+
+        self.assertTrue(self.ws.install_node_windows())
+
+        self.ws._mark_node_owned_by_microclaw.assert_called_once_with(self.ws.node_dir)
+        self.assertEqual(len(self.ws._rollback_actions), 1)
+
+    def _mock_successful_node_install(self):
+        self.ws._mirror_name = MIRROR_OFFICIAL
+        self.ws._resolve_target_node_version = lambda: NODE_FALLBACK_VERSION
+        self.ws._download_and_verify_node_msi = lambda _version, _path: True
+        self.ws._get_arch = lambda: "x64"
+        self.ws._get_node_version = lambda _path: f"v{NODE_FALLBACK_VERSION}"
+        self.ws._mark_node_owned_by_microclaw = unittest.mock.Mock()
+
+        def install(_cmd, **_kwargs):
+            self.ws.node_dir.mkdir(parents=True, exist_ok=True)
+            (self.ws.node_dir / "node.exe").write_bytes(b"new Node")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self.ws._run = install
 
     def test_installed_node_major_reads_highest(self):
         with (
@@ -662,8 +763,8 @@ class WindowsSetupUpgradeTests(unittest.TestCase):
         # is deterministic: raise NodeInstallBlocked so the pipeline stops
         # instead of re-prompting UAC on every retry.
         self.ws._mirror_name = MIRROR_OFFICIAL
-        self.ws.node_version = "22"
-        self.ws._resolve_target_node_version = lambda: "24.15.0"
+        self.ws.node_version = "24"
+        self.ws._resolve_target_node_version = lambda: "24.16.0"
         self.ws._download_and_verify_node_msi = lambda _version, _path: True
         self.ws._get_arch = lambda: "x64"
 
