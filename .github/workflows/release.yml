@@ -66,25 +66,30 @@ jobs:
       AZURE_TENANT_ID: ${{ (github.event_name != 'workflow_dispatch' || inputs.sign) && secrets.AZURE_TENANT_ID || '' }}
       AZURE_CLIENT_ID: ${{ (github.event_name != 'workflow_dispatch' || inputs.sign) && secrets.AZURE_CLIENT_ID || '' }}
       AZURE_CLIENT_SECRET: ${{ (github.event_name != 'workflow_dispatch' || inputs.sign) && secrets.AZURE_CLIENT_SECRET || '' }}
+      MSIX_PRODUCTION_IDENTITY_CONFIGURED: ${{ secrets.MSIX_IDENTITY_NAME != '' && secrets.MSIX_PUBLISHER != '' && secrets.MSIX_PUBLISHER_DISPLAY_NAME != '' && secrets.MSIX_APPLICATION_ID != '' }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       # GitHub-hosted windows-latest ships older/other toolchain versions than
       # build.ps1 expects, so pin them explicitly with the setup-* actions
       # (reliable on hosted runners, unlike on the self-hosted NetworkService
       # account). build.ps1 then installs its own npm/pip deps and locates NSIS
       # from electron-builder's cache.
-      - name: Setup Node.js 24
+      - name: Setup Node.js 26
         uses: actions/setup-node@v4
         with:
-          node-version: "24.16.0"
+          node-version: "26"
 
-      - name: Setup .NET 9 SDK
+      - name: Setup .NET 9 and 10 SDKs
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -94,16 +99,16 @@ jobs:
       - name: Verify toolchain
         run: |
           $ErrorActionPreference = 'Stop'
-          $node = (& node --version).TrimStart('v')
-          $parsed = [version]$node
-          $supported =
-            ($parsed.Major -eq 24 -and $parsed -ge [version]'24.16.0') -or
-            ($parsed.Major -ge 26 -and $parsed -ge [version]'26.1.0')
-          if (-not $supported) { throw "Node $node is unsupported by OpenClaw 2026.10.2" }
+          . .\scripts\windows\node-runtime.ps1
+          $node = & node --version
+          if ($LASTEXITCODE -ne 0 -or -not (Test-SupportedNodeVersion $node)) {
+            throw "Node $node is unsupported by OpenClaw 2026.10.2 (need >=24.16.0 <25 || >=26.1.0; install Node 26)"
+          }
           Write-Host "node $node"
-          $dotnet = & dotnet --version
-          if ([version]($dotnet -split '-')[0] -lt [version]'9.0') { throw "dotnet $dotnet < 9.0" }
-          Write-Host "dotnet $dotnet"
+          $sdks = & dotnet --list-sdks
+          if (-not ($sdks -match '^9\.')) { throw ".NET 9 SDK is required" }
+          if (-not ($sdks -match '^10\.')) { throw ".NET 10 SDK is required" }
+          Write-Host $sdks
           Write-Host "python $(& python --version)"
 
       - name: Install Python build dependencies
@@ -129,6 +134,15 @@ jobs:
       - name: Run build.ps1 (builds + signs MicroClawSetup.exe)
         run: .\build.ps1
 
+      - name: Build unsigned MSIX
+        env:
+          MSIX_IDENTITY_NAME: ${{ secrets.MSIX_IDENTITY_NAME || 'MicroClaw.Test' }}
+          MSIX_PUBLISHER: ${{ secrets.MSIX_PUBLISHER || 'CN=MicroClaw Test' }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ secrets.MSIX_PUBLISHER_DISPLAY_NAME || 'MicroClaw' }}
+          MSIX_APPLICATION_ID: ${{ secrets.MSIX_APPLICATION_ID || 'MicroClaw' }}
+          MSIX_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '1.0.0' }}
+        run: npm run dist:msix --prefix desktop
+
       - name: Verify build artifacts
         run: |
           $ErrorActionPreference = 'Stop'
@@ -138,11 +152,19 @@ jobs:
             'dist\MicroClawSetup.exe'
           )
           $missing = $expected | Where-Object { -not (Test-Path $_) }
+          if (-not (Get-ChildItem 'desktop\release\MicroClawDesktop-*-x64.msix')) {
+            $missing += 'desktop\release\MicroClawDesktop-<version>-x64.msix'
+          }
           if ($missing) {
             Write-Host "::error::Missing expected artifacts: $($missing -join ', ')"
             exit 1
           }
           Get-ChildItem dist | Format-Table Name, Length, LastWriteTime
+
+      - name: Validate MSIX contents
+        run: |
+          Get-ChildItem desktop\release\MicroClawDesktop-*-x64.msix |
+            ForEach-Object { .\scripts\windows\validate-msix.ps1 -Path $_.FullName }
 
       # Confirm the single-exe installer is Authenticode-signed. When signing
       # secrets are configured this must be Valid; otherwise we surface a clear
@@ -173,6 +195,13 @@ jobs:
           path: dist\MicroClawSetup.exe
           if-no-files-found: error
 
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MicroClawDesktop-MSIX
+          path: desktop\release\MicroClawDesktop-*-x64.msix
+          if-no-files-found: error
+
       # Publish a GitHub Release with the signed exe when built from a tag.
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -181,3 +210,10 @@ jobs:
           files: dist\MicroClawSetup.exe
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      - name: Publish production-identity MSIX
+        if: startsWith(github.ref, 'refs/tags/v') && env.MSIX_PRODUCTION_IDENTITY_CONFIGURED == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop\release\MicroClawDesktop-*-x64.msix
+          fail_on_unmatched_files: true

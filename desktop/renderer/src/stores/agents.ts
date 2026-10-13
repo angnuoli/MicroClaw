@@ -1,7 +1,11 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { t, locale } from "../i18n";
-import { AGENT_CATALOG, type AgentCatalogEntry } from "../../../src/agent-catalog";
+import {
+  AGENT_CATALOG,
+  LEGACY_AGENT_ID_ALIASES,
+  type AgentCatalogEntry,
+} from "../../../src/agent-catalog";
 
 export interface QuickTask {
   title: string;
@@ -25,16 +29,15 @@ interface RuntimeAgent {
   description?: string;
 }
 
-// Static import of avatar assets
-const avatarModules = import.meta.glob("../assets/*.png", {
+const agentAssetModules = import.meta.glob("../assets/*.png", {
   eager: true,
   query: "?url",
   import: "default",
 }) as Record<string, string>;
 
-function getAvatarUrl(filename: string): string {
+function getAgentAssetUrl(filename: string): string {
   const key = `../assets/${filename}`;
-  return avatarModules[key] || "";
+  return agentAssetModules[key] || "";
 }
 
 /** Resolve a catalog entry into an Agent with translated strings. */
@@ -43,8 +46,8 @@ function resolveCatalogAgent(def: AgentCatalogEntry, isAdded: boolean): Agent {
     id: def.id,
     name: t(def.nameKey),
     description: t(def.descKey),
-    avatar: getAvatarUrl(def.avatar),
-    image: getAvatarUrl(def.image),
+    avatar: getAgentAssetUrl(def.avatar),
+    image: getAgentAssetUrl(def.image),
     tags: def.tagKeys.map((k) => t(k)),
     quickTasks: def.taskKeys.map((tk) => ({
       title: t(tk.titleKey),
@@ -65,15 +68,14 @@ function normalizeRuntimeAgents(value: unknown): RuntimeAgent[] {
       return [];
     }
     const id = (candidate as { id: string }).id;
+    if (Object.hasOwn(LEGACY_AGENT_ID_ALIASES, id)) return [];
     const nameValue = (candidate as { name?: unknown }).name;
     const descriptionValue = (candidate as { description?: unknown }).description;
     return [
       {
         id,
         name: typeof nameValue === "string" && nameValue ? nameValue : id,
-        ...(typeof descriptionValue === "string"
-          ? { description: descriptionValue }
-          : {}),
+        ...(typeof descriptionValue === "string" ? { description: descriptionValue } : {}),
       },
     ];
   });
@@ -94,8 +96,8 @@ export const useAgentStore = defineStore("agents", () => {
       }
       return {
         ...runtimeAgent,
-        avatar: getAvatarUrl("normal.png"),
-        image: getAvatarUrl("normal.png"),
+        avatar: getAgentAssetUrl("main-avatar.png"),
+        image: getAgentAssetUrl("main-avatar.png"),
         isAdded: true,
       };
     });

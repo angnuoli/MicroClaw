@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { t } from "../i18n";
 import { AGENT_WARMUP_SESSION_KEY } from "../../../src/constants";
+import { canonicalAgentId } from "../../../src/agent-catalog";
 
 export interface Session {
   key: string;
@@ -10,6 +11,7 @@ export interface Session {
   updatedAt: number;
   preview: string; // last message snippet
   agentId?: string;
+  pinned?: boolean;
 }
 
 const STORAGE_KEY = "openclaw-sessions";
@@ -18,7 +20,12 @@ function loadFromStorage(): Session[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const stored = raw ? (JSON.parse(raw) as Session[]) : [];
-    return stored.filter((session) => session.key !== AGENT_WARMUP_SESSION_KEY);
+    return stored
+      .filter((session) => session.key !== AGENT_WARMUP_SESSION_KEY)
+      .map((session) => ({
+        ...session,
+        ...(session.agentId ? { agentId: canonicalAgentId(session.agentId) } : {}),
+      }));
   } catch {
     return [];
   }
@@ -31,6 +38,7 @@ function saveToStorage(sessions: Session[]) {
 export const useSessionStore = defineStore("sessions", () => {
   const sessions = ref<Session[]>(loadFromStorage());
   const currentKey = ref<string | null>(null);
+  const gatewayTitles = ref<Record<string, string>>({});
 
   const sortedSessions = computed(() =>
     [...sessions.value].sort((a, b) => b.updatedAt - a.updatedAt),
@@ -39,6 +47,7 @@ export const useSessionStore = defineStore("sessions", () => {
   /** Ensure a session entry exists for the given key. */
   function ensureSession(key: string, agentId?: string) {
     if (key === AGENT_WARMUP_SESSION_KEY) return;
+    const canonicalId = agentId ? canonicalAgentId(agentId) : undefined;
     const existing = sessions.value.find((s) => s.key === key);
     if (!existing) {
       sessions.value.push({
@@ -47,11 +56,11 @@ export const useSessionStore = defineStore("sessions", () => {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         preview: "",
-        agentId,
+        agentId: canonicalId,
       });
       saveToStorage(sessions.value);
-    } else if (agentId && !existing.agentId) {
-      existing.agentId = agentId;
+    } else if (canonicalId && !existing.agentId) {
+      existing.agentId = canonicalId;
       saveToStorage(sessions.value);
     }
     currentKey.value = key;
@@ -75,7 +84,7 @@ export const useSessionStore = defineStore("sessions", () => {
       );
 
     reusable.key = key;
-    if (agentId) reusable.agentId = agentId;
+    if (agentId) reusable.agentId = canonicalAgentId(agentId);
     sessions.value = sessions.value.filter(
       (session) => session === reusable || !emptySessions.includes(session),
     );
@@ -94,6 +103,14 @@ export const useSessionStore = defineStore("sessions", () => {
     }
   }
 
+  function setGatewayTitles(titles: Readonly<Record<string, string>>) {
+    gatewayTitles.value = { ...titles };
+  }
+
+  function getDisplayTitle(session: Pick<Session, "key" | "title">) {
+    return gatewayTitles.value[session.key] || session.title;
+  }
+
   /** Remove a session. */
   function removeSession(key: string) {
     sessions.value = sessions.value.filter((s) => s.key !== key);
@@ -101,12 +118,18 @@ export const useSessionStore = defineStore("sessions", () => {
     saveToStorage(sessions.value);
   }
 
+  /** Toggle whether a session stays at the top of the sidebar. */
+  function togglePinned(key: string) {
+    const session = sessions.value.find((session) => session.key === key);
+    if (!session) return;
+
+    session.pinned = !session.pinned;
+    saveToStorage(sessions.value);
+  }
+
   /** Replace a local alias with its canonical Gateway key and merge duplicates. */
   function canonicalizeSession(aliasKey: string, canonicalKey: string) {
-    if (
-      aliasKey === AGENT_WARMUP_SESSION_KEY ||
-      canonicalKey === AGENT_WARMUP_SESSION_KEY
-    ) {
+    if (aliasKey === AGENT_WARMUP_SESSION_KEY || canonicalKey === AGENT_WARMUP_SESSION_KEY) {
       return;
     }
     if (!aliasKey || aliasKey === canonicalKey) return;
@@ -123,6 +146,7 @@ export const useSessionStore = defineStore("sessions", () => {
         title: newer.title !== defaultTitle ? newer.title : older.title,
         preview: newer.preview || older.preview,
         agentId: newer.agentId || older.agentId,
+        pinned: alias.pinned || canonical.pinned,
         createdAt: Math.min(alias.createdAt, canonical.createdAt),
         updatedAt: Math.max(alias.updatedAt, canonical.updatedAt),
       };
@@ -158,11 +182,15 @@ export const useSessionStore = defineStore("sessions", () => {
   return {
     sessions,
     currentKey,
+    gatewayTitles,
     sortedSessions,
     ensureSession,
     reconcileEmptySessions,
     updateSession,
+    setGatewayTitles,
+    getDisplayTitle,
     removeSession,
+    togglePinned,
     canonicalizeSession,
     clearAll,
     autoTitle,

@@ -2,9 +2,6 @@
   <div class="settings-view">
     <!-- Left sidebar: icon grid nav -->
     <div class="settings-sidebar">
-      <div class="settings-title">
-        {{ t("settings.title") }}
-      </div>
       <div class="menu-list">
         <div
           v-for="item in menuItems"
@@ -20,25 +17,35 @@
     </div>
 
     <!-- Right content: grouped card rows -->
-    <div class="settings-content">
+    <div
+      class="settings-content"
+      :class="{ 'settings-content--skills': devSettingsEnabled && activeSection === 'skills' }"
+    >
       <!-- General -->
       <div v-if="activeSection === 'general'" class="section">
         <div class="section-label">{{ t("settings.application") }}</div>
         <div class="card-group">
-          <div class="card-row">
-            <span class="row-label">{{ t("settings.language") }}</span>
-            <el-select v-model="settings.language" style="width: 140px">
-              <el-option label="简体中文" value="zh-CN" />
-              <el-option label="English" value="en-US" />
-            </el-select>
+          <div v-show="false" class="card-row">
+            <label class="row-label" for="settings-language-select">
+              {{ t("settings.language") }}
+            </label>
+            <select
+              id="settings-language-select"
+              v-model="settings.language"
+              class="language-select"
+              :aria-label="t('settings.language')"
+            >
+              <option value="zh-CN">简体中文</option>
+              <option value="en-US">English</option>
+            </select>
           </div>
           <div class="card-row">
             <span class="row-label">{{ t("settings.autoStart") }}</span>
             <el-switch v-model="settings.autoStart" />
           </div>
           <div class="card-row no-border">
-            <span class="row-label">{{ t("settings.startMinimized") }}</span>
-            <el-switch v-model="settings.startMinimized" />
+            <span class="row-label">{{ t("settings.minimizeToTray") }}</span>
+            <el-switch v-model="settings.minimizeToTray" />
           </div>
         </div>
 
@@ -51,6 +58,41 @@
               <el-radio value="dark">{{ t("settings.themeDark") }}</el-radio>
               <el-radio value="system">{{ t("settings.themeSystem") }}</el-radio>
             </el-radio-group>
+          </div>
+        </div>
+
+        <div class="sub-label">{{ t("settings.gateway") }}</div>
+        <div class="card-group">
+          <div class="card-row no-border">
+            <span class="row-label">{{ t("settings.connectionStatus") }}</span>
+            <div style="display: flex; align-items: center; gap: 8px">
+              <span
+                class="status-indicator"
+                :class="
+                  gateway.status === 'running' ? 'status-indicator--ok' : 'status-indicator--error'
+                "
+              >
+                <span class="status-dot"></span>
+                {{ gateway.status === "running" ? t("settings.connected") : gateway.status }}
+              </span>
+              <el-button size="small" @click="restartGateway">{{
+                t("settings.restart")
+              }}</el-button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sub-label">{{ t("settings.logs") }}</div>
+        <div class="card-group">
+          <div class="card-row no-border">
+            <span class="row-label">{{ t("settings.gatewayLog") }}</span>
+            <el-button
+              size="small"
+              :loading="exportingGatewayLogs"
+              :disabled="gateway.logs.length === 0"
+              @click="exportGatewayLogs"
+              >{{ t("settings.export") }}</el-button
+            >
           </div>
         </div>
       </div>
@@ -86,7 +128,8 @@
             <div class="card-row" :class="{ 'no-border': !usageData.maxBudget }">
               <span class="row-label">{{ t("settings.totalSpend") }}</span>
               <span class="row-value usage-spend"
-                >{{ t("settings.currencySymbol") }}{{ toCny(usageData.totalSpend).toFixed(2) }}</span
+                >{{ t("settings.currencySymbol")
+                }}{{ toCny(usageData.totalSpend).toFixed(2) }}</span
               >
             </div>
             <div v-if="usageData.maxBudget" class="card-row no-border">
@@ -94,7 +137,8 @@
               <div class="budget-bar-wrapper">
                 <span class="row-value"
                   >{{ t("settings.currencySymbol") }}{{ toCny(usageData.totalSpend).toFixed(2) }} /
-                  {{ t("settings.currencySymbol") }}{{ toCny(usageData.maxBudget).toFixed(2) }}</span
+                  {{ t("settings.currencySymbol")
+                  }}{{ toCny(usageData.maxBudget).toFixed(2) }}</span
                 >
                 <div class="budget-bar">
                   <div
@@ -170,103 +214,180 @@
               </div>
             </div>
           </template>
-
         </template>
 
         <div class="section-footer">{{ t("settings.usageFooter") }}</div>
       </div>
 
       <!-- Models -->
-      <div v-if="activeSection === 'models'" class="section">
-        <!-- Model -->
+      <div v-if="activeSection === 'models'" class="section model-settings-section">
         <div class="sub-label-row">
-          <span class="sub-label">{{ t("settings.customModels") }}</span>
-          <div v-if="customModels.length" class="sub-label-actions">
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              :disabled="
-                Boolean(switchingModelRef) || Boolean(removingModelRef) || copilotDisconnecting
-              "
-              @click="showProviderSetup = true"
-            >
-              {{ t("settings.setUpProvider") }}
-            </el-button>
-            <el-button
-              v-if="selectedModelEntry?.source !== 'auth-managed' && selectedModelIndex >= 0"
-              size="small"
-              type="danger"
-              plain
-              :loading="removingModelRef === selectedModel"
-              :disabled="Boolean(switchingModelRef) || Boolean(removingModelRef)"
-              @click="removeCustomModel(selectedModelIndex)"
-            >
-              {{ t("settings.delete") }}
-            </el-button>
-            <el-button
-              v-else-if="selectedModelEntry?.providerKey === 'github-copilot'"
-              size="small"
-              type="danger"
-              plain
-              :loading="copilotDisconnecting"
-              :disabled="Boolean(switchingModelRef) || Boolean(removingModelRef)"
-              @click="disconnectGitHubCopilot"
-            >
-              {{ t("settings.disconnect") }}
-            </el-button>
-          </div>
+          <h2 class="model-section-title">{{ t("modelManager.providers") }}</h2>
         </div>
-        <div class="card-group">
-          <template v-if="customModels.length">
-            <div class="card-row">
-              <span class="row-label">{{ t("settings.provider") }}</span>
-              <span class="row-value">{{ currentProviderName }}</span>
-            </div>
+        <p class="provider-description">{{ t("modelManager.providersHint") }}</p>
+        <p v-if="modelStatusError" class="provider-error" role="alert">{{ modelStatusError }}</p>
+        <SessionModelRecoveryNotice
+          :disabled="chatStore.streaming || Boolean(switchingModelRef || localSelecting)"
+          @state="sessionRecovery = $event"
+          @busy="sessionRecovering = $event"
+          @recovered="refreshModelsConfig"
+        />
+        <div class="card-group default-model-card">
+          <template v-if="modelOptions.length">
             <div class="card-row no-border">
-              <span class="row-label">{{ t("settings.currentModel") }}</span>
+              <span class="row-label">{{ t("modelManager.defaultModel") }}</span>
               <div class="model-picker-actions">
-                <el-select
+                <DefaultModelPicker
                   class="model-picker-select"
                   :model-value="selectedModel"
-                  :loading="
-                    Boolean(switchingModelRef) || Boolean(removingModelRef) || copilotDisconnecting
-                  "
-                  :disabled="
-                    Boolean(switchingModelRef) || Boolean(removingModelRef) || copilotDisconnecting
-                  "
-                  filterable
+                  :models="modelOptions"
+                  :model-status="modelOptionStatus"
+                  :loading="copilotModelsLoading || modelActionBusy"
+                  :switching="Boolean(switchingModelRef) || localSelecting"
+                  :disabled="modelActionBusy || chatStore.streaming || Boolean(sessionRecovery)"
                   @change="selectModel"
-                >
-                  <el-option
-                    v-for="model in customModels"
-                    :key="getModelRef(model)"
-                    :label="model.name"
-                    :value="getModelRef(model)"
-                  />
-                </el-select>
+                />
               </div>
             </div>
           </template>
           <div v-else-if="!copilotModelsLoading" class="card-row no-border">
             <span class="placeholder-text">{{ t("settings.noProviderConfigured") }}</span>
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              :disabled="
-                Boolean(switchingModelRef) || Boolean(removingModelRef) || copilotDisconnecting
-              "
-              @click="showProviderSetup = true"
-            >
-              {{ t("settings.setUpModelProvider") }}
-            </el-button>
           </div>
+        </div>
+        <div class="provider-cards">
+          <section
+            v-for="provider in providerCards"
+            :key="provider.key"
+            class="provider-card"
+            :data-provider="provider.key"
+          >
+            <header class="provider-card-heading">
+              <div class="provider-card-title">
+                <strong>{{ provider.label }}</strong>
+                <span v-if="provider.key === 'llama-cpp'" class="provider-runtime">llama.cpp</span>
+                <p>
+                  {{
+                    provider.key === "llama-cpp"
+                      ? t("modelManager.localHint")
+                      : provider.key === "github-copilot"
+                        ? t("modelManager.copilotHint")
+                        : t("modelManager.apiHint")
+                  }}
+                </p>
+              </div>
+              <span class="provider-state" :class="{ warning: provider.missing }">
+                {{
+                  t(
+                    provider.key === "llama-cpp" && localProviderReady
+                      ? "settings.connected"
+                      : provider.missing
+                        ? "localModel.filesMissing"
+                        : provider.models.length
+                          ? "localModel.configured"
+                          : "modelManager.notConfigured",
+                  )
+                }}
+              </span>
+              <el-button
+                :data-testid="
+                  provider.key === 'llama-cpp'
+                    ? 'add-local-model'
+                    : `manage-provider-${provider.key}`
+                "
+                size="small"
+                :disabled="modelActionBusy"
+                @click="
+                  provider.key === 'llama-cpp' ? openLocalModel() : openCloudSetup(provider.key)
+                "
+                >{{
+                  t(
+                    provider.key === "llama-cpp"
+                      ? localProviderReady
+                        ? "modelManager.configure"
+                        : "fixedLocal.enable"
+                      : provider.models.length
+                        ? "modelManager.configure"
+                        : "modelManager.add",
+                  )
+                }}</el-button
+              >
+            </header>
+            <LocalModelSetupDialog
+              v-if="provider.key === 'llama-cpp' && showLocalSetup"
+              inline
+              :target-model-ref="localTargetModel"
+              :default-agent-override="defaultAgentOverride"
+              :streaming="chatStore.streaming"
+              :removable-connections="removableLocalConnections"
+              :connection-mutation-busy="Boolean(removingModelRef)"
+              @close="showLocalSetup = false"
+              @configured="handleProviderConfigured"
+              @remove-connection="removeLocalConnection"
+            />
+            <div
+              v-if="provider.key === editingProviderKey && provider.key !== 'llama-cpp'"
+              class="provider-editor"
+            >
+              <div
+                v-for="model in provider.editableModels"
+                :key="getModelRef(model)"
+                class="provider-model-row"
+              >
+                <span>{{ model.name }}</span>
+                <span v-if="getModelRef(model) === selectedModel" class="provider-state">{{
+                  t("modelManager.defaultModel")
+                }}</span>
+                <el-button
+                  v-if="model.source !== 'auth-managed'"
+                  size="small"
+                  text
+                  :disabled="modelActionBusy"
+                  @click="openCloudSetup(provider.key, model)"
+                  >{{ t("modelManager.edit") }}</el-button
+                >
+                <el-button
+                  v-if="model.source !== 'auth-managed'"
+                  size="small"
+                  text
+                  type="danger"
+                  :disabled="modelMutationBlocked"
+                  @click="removeCustomModel(customModels.indexOf(model))"
+                  >{{ t("localModel.removeConnection") }}</el-button
+                >
+              </div>
+              <el-button
+                v-if="provider.key === 'github-copilot' && provider.models.length"
+                size="small"
+                text
+                type="danger"
+                :disabled="modelMutationBlocked"
+                @click="disconnectGitHubCopilot"
+                >{{ t("settings.disconnect") }}</el-button
+              >
+              <ModelSetupDialog
+                :key="editingModelRef"
+                v-model="showProviderSetup"
+                inline
+                manage-only
+                :initial-family="editingFamily"
+                :current-provider="providerPrefill"
+                :streaming="chatStore.streaming"
+                @busy="providerSaving = $event"
+                @configured="handleProviderConfigured"
+              />
+            </div>
+          </section>
+        </div>
+        <div v-if="localOperation?.busy" class="local-setup-status" role="status">
+          <span>{{ t("localModel.setupPending") }}</span>
+          <el-button size="small" text @click="openLocalModel()">
+            {{ t("localModel.viewSetup") }}
+          </el-button>
         </div>
 
         <!-- Web search -->
         <div class="sub-label-row">
-          <span class="sub-label">{{ t("settings.webSearch") }}</span>
+          <h2 class="model-section-title">{{ t("settings.webSearch") }}</h2>
           <div class="sub-label-actions">
             <el-button
               size="small"
@@ -279,14 +400,19 @@
             >
           </div>
         </div>
-        <div class="card-group">
-          <div class="card-row">
+        <div class="card-group" data-testid="web-search-settings">
+          <div class="card-row" :class="{ 'no-border': !activeSearchProvider.requiresKey }">
             <span class="row-label">{{ t("settings.provider") }}</span>
-            <el-select v-model="searchProvider" style="width: 130px">
-              <el-option v-for="p in searchProviders" :key="p.id" :label="p.name" :value="p.id" />
-            </el-select>
+            <div class="model-search-selector">
+              <span v-if="!activeSearchProvider.requiresKey" class="model-search-hint">
+                {{ t("settings.noApiKeyRequired") }}
+              </span>
+              <el-select v-model="searchProvider" style="width: 130px">
+                <el-option v-for="p in searchProviders" :key="p.id" :label="p.name" :value="p.id" />
+              </el-select>
+            </div>
           </div>
-          <div class="card-row no-border api-key-row">
+          <div v-if="activeSearchProvider.requiresKey" class="card-row no-border api-key-row">
             <span class="row-label">{{ t("settings.apiKey") }}</span>
             <a
               href="#"
@@ -304,72 +430,427 @@
           </div>
         </div>
         <div class="section-footer">{{ t("settings.webSearchDesc") }}</div>
-      </div>
-
-      <!-- Gateway -->
-      <div v-if="activeSection === 'gateway'" class="section">
-        <div class="section-label">{{ t("settings.connectionStatus") }}</div>
-        <div class="card-group">
-          <div class="card-row no-border">
-            <span class="row-label">{{ t("settings.status") }}</span>
-            <div style="display: flex; align-items: center; gap: 8px">
-              <span
-                class="status-indicator"
-                :class="
-                  gateway.status === 'running'
-                    ? 'status-indicator--ok'
-                    : 'status-indicator--error'
-                "
-              >
-                <span class="status-dot"></span>
-                {{ gateway.status === "running" ? t("settings.connected") : gateway.status }}
-              </span>
-              <el-button size="small" @click="restartGateway">{{
-                t("settings.restart")
-              }}</el-button>
-            </div>
-          </div>
-        </div>
-
-        <div class="sub-label">{{ t("settings.port") }}</div>
-        <div class="card-group">
-          <div class="card-row no-border">
-            <span class="row-label">{{ t("settings.port") }}</span>
-            <div class="port-input-group">
-              <span class="port-prefix">ws://127.0.0.1 :</span>
-              <el-input
-                v-model="gatewayPort"
-                style="width: 80px"
-                @change="saveGatewayPort"
-              />
-            </div>
-          </div>
-        </div>
-        <div class="section-footer">{{ t("settings.portDesc") }}</div>
-
-        <div class="sub-label-row">
-          <span class="sub-label">{{ t("settings.gatewayLog") }}</span>
-          <el-button size="small" @click="gateway.logs = []">{{ t("settings.clear") }}</el-button>
-        </div>
-        <div class="gateway-log-box">
-          <div v-if="gateway.logs.length === 0" class="gateway-log-empty">
-            {{ t("settings.noLogs") }}
-          </div>
-          <div v-else class="gateway-log-content" ref="logBoxRef">
-            <div v-for="(line, i) in gateway.logs" :key="i" class="gateway-log-line">
-              {{ line }}
-            </div>
-          </div>
-        </div>
+        <LocalModelDownloadDialog
+          v-if="localSelection"
+          :key="localSelection"
+          :model-ref="localSelection"
+          :streaming="chatStore.streaming"
+          @close="localSelection = ''"
+          @busy="localSelecting = $event"
+          @selected="handleLocalModelSelected"
+        />
       </div>
 
       <!-- Channels -->
       <ChannelsView v-if="activeSection === 'channels'" embedded />
 
+      <!-- Skills (development builds only) -->
+      <component
+        :is="SkillsDevPanel"
+        v-if="devSettingsEnabled && SkillsDevPanel && activeSection === 'skills'"
+      />
+
       <!-- Security / Sandbox -->
       <div v-if="activeSection === 'security'" class="section">
         <div class="section-label">{{ t("settings.security") }}</div>
-        <div class="card-group">
+        <div class="card-group mxc-card">
+          <div class="card-row">
+            <div>
+              <span class="row-label">{{ t("settings.windowsNodeMxc") }}</span>
+              <div class="mxc-subtitle">{{ t("settings.windowsNodeMxcExperimental") }}</div>
+            </div>
+            <el-switch
+              :model-value="windowsNodeMxcStatus?.desiredEnabled ?? false"
+              :loading="windowsNodeMxcApplying"
+              @change="toggleWindowsNodeMxc"
+            />
+          </div>
+          <template v-if="windowsNodeMxcStatus">
+            <div class="card-row">
+              <span class="row-label">{{ t("settings.windowsNodeMxcEffective") }}</span>
+              <span class="mxc-state" :class="windowsNodeMxcProtectionClass">
+                {{ windowsNodeMxcProtectionLabel }}
+              </span>
+            </div>
+            <div v-if="windowsNodeMxcProtectionDetail" class="mxc-primary-detail">
+              {{ windowsNodeMxcProtectionDetail }}
+            </div>
+            <div
+              class="card-row no-border mxc-folder-policy"
+              style="flex-direction: column; align-items: stretch"
+            >
+              <span class="row-label">{{ t("settings.windowsNodeMxcFolders") }}</span>
+              <div class="mxc-folder-policy-hint">
+                {{ t("settings.windowsNodeMxcFoldersHint") }}
+              </div>
+              <div
+                v-if="windowsNodeMxcStatus.desiredEnabled"
+                class="mxc-alert mxc-alert-warning mxc-folder-policy-locked"
+              >
+                {{ t("settings.windowsNodeMxcFoldersStaged") }}
+              </div>
+              <div
+                v-if="windowsNodeMxcStatus.folderPolicyRecovery?.lastError"
+                class="mxc-alert mxc-alert-error"
+              >
+                {{ t("settings.windowsNodeMxcFolderRecovery") }}:
+                {{ windowsNodeMxcStatus.folderPolicyRecovery.lastError }}
+                <el-button text size="small" @click="stagePreviousWindowsNodeMxcFolderPolicy">
+                  {{ t("settings.windowsNodeMxcStagePreviousFolders") }}
+                </el-button>
+              </div>
+              <div class="dir-section">
+                <div class="mxc-folder-policy-heading">
+                  <span class="dir-section-label">{{ t("settings.sandboxDirsRW") }}</span>
+                  <el-button
+                    data-testid="mxc-add-rw"
+                    size="small"
+                    type="primary"
+                    plain
+                    :disabled="windowsNodeMxcFolderApplying"
+                    @click="addWindowsNodeMxcFolder('rw')"
+                  >
+                    {{ t("settings.sandboxAddDir") }}
+                  </el-button>
+                </div>
+                <div
+                  v-for="dir in windowsNodeMxcFolderDraft.rw"
+                  :key="'mxc-rw-' + dir"
+                  class="dir-item"
+                >
+                  <span class="dir-path" :title="dir">{{ dir }}</span>
+                  <span class="dir-badge dir-badge-rw">RW</span>
+                  <el-button
+                    data-testid="mxc-change-ro"
+                    text
+                    size="small"
+                    :disabled="windowsNodeMxcFolderApplying"
+                    @click="changeWindowsNodeMxcFolderAccess(dir, 'ro')"
+                  >
+                    {{ t("settings.windowsNodeMxcChangeToRo") }}
+                  </el-button>
+                  <button
+                    class="tag-remove"
+                    :disabled="windowsNodeMxcFolderApplying"
+                    @click="removeWindowsNodeMxcFolder(dir, 'rw')"
+                  >
+                    &times;
+                  </button>
+                </div>
+                <div v-if="windowsNodeMxcFolderDraft.rw.length === 0" class="dir-empty">
+                  {{ t("settings.sandboxNoDirs") }}
+                </div>
+              </div>
+              <div class="dir-section" style="margin-top: 10px">
+                <div class="mxc-folder-policy-heading">
+                  <span class="dir-section-label">{{ t("settings.sandboxDirsRO") }}</span>
+                  <el-button
+                    data-testid="mxc-add-ro"
+                    size="small"
+                    type="primary"
+                    plain
+                    :disabled="windowsNodeMxcFolderApplying"
+                    @click="addWindowsNodeMxcFolder('ro')"
+                  >
+                    {{ t("settings.sandboxAddDir") }}
+                  </el-button>
+                </div>
+                <div
+                  v-for="dir in windowsNodeMxcFolderDraft.ro"
+                  :key="'mxc-ro-' + dir"
+                  class="dir-item"
+                >
+                  <span class="dir-path" :title="dir">{{ dir }}</span>
+                  <span class="dir-badge dir-badge-ro">RO</span>
+                  <el-button
+                    data-testid="mxc-change-rw"
+                    text
+                    size="small"
+                    :disabled="windowsNodeMxcFolderApplying"
+                    @click="changeWindowsNodeMxcFolderAccess(dir, 'rw')"
+                  >
+                    {{ t("settings.windowsNodeMxcChangeToRw") }}
+                  </el-button>
+                  <button
+                    class="tag-remove"
+                    :disabled="windowsNodeMxcFolderApplying"
+                    @click="removeWindowsNodeMxcFolder(dir, 'ro')"
+                  >
+                    &times;
+                  </button>
+                </div>
+                <div v-if="windowsNodeMxcFolderDraft.ro.length === 0" class="dir-empty">
+                  {{ t("settings.sandboxNoDirs") }}
+                </div>
+              </div>
+              <div v-if="windowsNodeMxcFolderDraftDirty" class="mxc-folder-policy-actions">
+                <el-button
+                  type="primary"
+                  :loading="windowsNodeMxcFolderApplying"
+                  data-testid="mxc-apply-folder-policy"
+                  @click="applyWindowsNodeMxcFolderPolicy"
+                >
+                  {{ t("settings.windowsNodeMxcApplyFolders") }}
+                </el-button>
+                <el-button
+                  :disabled="windowsNodeMxcFolderApplying"
+                  @click="replaceWindowsNodeMxcFolderDraft(windowsNodeMxcFolderBaseline)"
+                >
+                  {{ t("common.cancel") }}
+                </el-button>
+              </div>
+            </div>
+            <div
+              class="card-row no-border mxc-folder-policy"
+              style="flex-direction: column; align-items: stretch"
+            >
+              <div class="mxc-folder-policy-heading">
+                <span class="row-label">{{ t("settings.windowsNodeMxcDurableApprovals") }}</span>
+                <el-button
+                  v-if="windowsNodeMxcStatus.durableApprovals.records.length"
+                  size="small"
+                  type="danger"
+                  plain
+                  @click="revokeAllWindowsNodeMxcDurableApprovals"
+                >
+                  {{ t("settings.windowsNodeMxcRevokeAllApprovals") }}
+                </el-button>
+              </div>
+              <div class="mxc-folder-policy-hint">
+                {{ t("settings.windowsNodeMxcDurableApprovalsHint") }}
+              </div>
+              <div
+                v-for="approval in windowsNodeMxcStatus.durableApprovals.records"
+                :key="approval.id"
+                class="mxc-durable-approval"
+              >
+                <strong>{{ approval.commandText }}</strong>
+                <span>{{ approval.executablePath }}</span>
+                <span
+                  >{{ t("settings.windowsNodeMxcApprovalCwd") }}: {{ approval.cwdBinding }}</span
+                >
+                <span>
+                  {{ t("settings.windowsNodeMxcApprovalAccess") }}:
+                  {{
+                    approval.declaredAccess
+                      .map((entry) => `${entry.access.toUpperCase()} ${entry.path}`)
+                      .join(", ") || "none"
+                  }}
+                </span>
+                <span>
+                  {{ t("settings.windowsNodeMxcApprovalScope") }}:
+                  {{ approval.agentId ?? "none" }} / {{ approval.sessionKey }}
+                </span>
+                <span>
+                  {{ t("settings.windowsNodeMxcApprovalCreated") }}: {{ approval.createdAt }} ·
+                  {{ t("settings.windowsNodeMxcApprovalLastUsed") }}:
+                  {{ approval.lastUsedAt ?? t("settings.windowsNodeMxcApprovalNever") }}
+                </span>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  @click="revokeWindowsNodeMxcDurableApproval(approval.id)"
+                >
+                  {{ t("settings.windowsNodeMxcRevokeApproval") }}
+                </el-button>
+              </div>
+              <div
+                v-if="windowsNodeMxcStatus.durableApprovals.records.length === 0"
+                class="dir-empty"
+              >
+                {{ t("settings.windowsNodeMxcNoDurableApprovals") }}
+              </div>
+              <div
+                v-if="windowsNodeMxcStatus.durableApprovals.warning"
+                class="mxc-alert mxc-alert-warning"
+              >
+                {{ windowsNodeMxcStatus.durableApprovals.warning }}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="mxc-technical-summary"
+              :aria-expanded="windowsNodeMxcTechnicalDetailsOpen"
+              aria-controls="windows-node-mxc-technical-details"
+              data-testid="mxc-technical-details-toggle"
+              @click="windowsNodeMxcTechnicalDetailsOpen = !windowsNodeMxcTechnicalDetailsOpen"
+            >
+              <span>{{ t("settings.windowsNodeMxcTechnicalDetails") }}</span>
+              <span class="mxc-technical-chevron" aria-hidden="true">
+                {{ windowsNodeMxcTechnicalDetailsOpen ? "−" : "+" }}
+              </span>
+            </button>
+            <div
+              v-if="windowsNodeMxcTechnicalDetailsOpen"
+              id="windows-node-mxc-technical-details"
+              class="mxc-technical-details"
+              role="region"
+              :aria-label="t('settings.windowsNodeMxcTechnicalDetails')"
+              data-testid="mxc-technical-details"
+            >
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcSelectedNode") }}</span>
+                <span class="row-value">
+                  {{
+                    windowsNodeMxcStatus.selectedNode
+                      ? `${windowsNodeMxcStatus.selectedNode.displayName} (${windowsNodeMxcStatus.selectedNode.id})`
+                      : t("settings.windowsNodeMxcUnavailable")
+                  }}
+                </span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcLifecycle") }}</span>
+                <span class="row-value">
+                  {{
+                    t(
+                      `settings.windowsNodeMxcLifecyclePhase.${windowsNodeMxcStatus.lifecycleState.phase}`,
+                    )
+                  }}
+                  <template v-if="windowsNodeMxcStatus.lifecycleState.detail">
+                    · {{ windowsNodeMxcStatus.lifecycleState.detail }}
+                  </template>
+                </span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcGatewayPolicy") }}</span>
+                <span class="row-value">{{ windowsNodeMxcStatus.gatewayPolicyState }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcTier") }}</span>
+                <span class="row-value">
+                  {{ windowsNodeMxcStatus.probe.tier ?? windowsNodeMxcStatus.probe.outcome }}
+                  <template v-if="windowsNodeMxcStatus.probe.needsDaclAugmentation">
+                    · {{ t("settings.windowsNodeMxcDaclRequired") }}
+                  </template>
+                </span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcBundledHelper") }}</span>
+                <span class="row-value">{{
+                  windowsNodeMxcStatus.helperRevision
+                    ? windowsNodeMxcStatus.helperRevision.slice(0, 12)
+                    : t("settings.windowsNodeMxcUnavailable")
+                }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcRuntimeContract") }}</span>
+                <span class="row-value">{{
+                  `${windowsNodeMxcStatus.mxcRuntimeVersion ?? t("settings.windowsNodeMxcUnavailable")} / ${
+                    windowsNodeMxcStatus.cwdPolicyContract ??
+                    t("settings.windowsNodeMxcUnavailable")
+                  }`
+                }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcSettingsFingerprint") }}</span>
+                <span class="row-value">{{
+                  windowsNodeMxcStatus.settingsFingerprint ??
+                  t("settings.windowsNodeMxcUnavailable")
+                }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcActivationLease") }}</span>
+                <span class="row-value">
+                  {{
+                    `${windowsNodeMxcStatus.activationLeaseMode ?? "none"} / ${
+                      windowsNodeMxcStatus.activationLeaseContract ??
+                      t("settings.windowsNodeMxcUnavailable")
+                    }`
+                  }}
+                </span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcGatewayGeneration") }}</span>
+                <span class="row-value">{{
+                  windowsNodeMxcStatus.gatewayGeneration || t("settings.windowsNodeMxcUnavailable")
+                }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcStrictFallback") }}</span>
+                <span class="row-value">{{
+                  windowsNodeMxcStatus.strictFallbackEffective
+                    ? t("settings.windowsNodeMxcEnabled")
+                    : t("settings.windowsNodeMxcDisabled")
+                }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcCwdAttestation") }}</span>
+                <span class="row-value">{{
+                  windowsNodeMxcStatus.cwdAttestationReady
+                    ? t("settings.windowsNodeMxcVerified")
+                    : t("settings.windowsNodeMxcUnverified")
+                }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcEffectiveTools") }}</span>
+                <span class="row-value">{{ windowsNodeMxcStatus.effectiveToolsState }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcCommands") }}</span>
+                <span class="row-value">{{
+                  windowsNodeMxcStatus.selectedNode?.commands.join(", ") || "—"
+                }}</span>
+              </div>
+              <div class="card-row">
+                <span class="row-label">{{ t("settings.windowsNodeMxcConnection") }}</span>
+                <span class="row-value">
+                  {{
+                    windowsNodeMxcStatus.selectedNode
+                      ? `${windowsNodeMxcStatus.selectedNode.connected ? "connected" : "disconnected"} / ${
+                          windowsNodeMxcStatus.selectedNode.paired
+                            ? "paired"
+                            : "reapproval required"
+                        }`
+                      : "not selected"
+                  }}
+                </span>
+              </div>
+              <div class="card-row no-border">
+                <span class="row-label">{{ t("settings.windowsNodeMxcSmoke") }}</span>
+                <span class="row-value">
+                  {{
+                    windowsNodeMxcStatus.smoke
+                      ? `${windowsNodeMxcStatus.smoke.deniedOutsideRoot.outcome} / ${windowsNodeMxcStatus.smoke.hostname.outcome} / ${windowsNodeMxcStatus.smoke.powershell.outcome}`
+                      : t("settings.windowsNodeMxcNotRun")
+                  }}
+                </span>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="section-footer">{{ t("settings.windowsNodeMxcCompatibility") }}</div>
+
+        <div v-if="windowsNodeMxcStatus?.probe.degraded" class="mxc-alert mxc-alert-warning">
+          {{ t("settings.windowsNodeMxcDegraded") }}
+        </div>
+        <div
+          v-for="blocker in windowsNodeMxcStatus?.blockers ?? []"
+          :key="`blocker-${blocker}`"
+          class="mxc-alert mxc-alert-error"
+        >
+          {{ blocker }}
+        </div>
+        <div
+          v-for="warning in windowsNodeMxcStatus?.warnings ?? []"
+          :key="`warning-${warning}`"
+          class="mxc-alert mxc-alert-warning"
+        >
+          {{ warning }}
+        </div>
+        <div
+          v-for="step in windowsNodeMxcStatus?.remediation ?? []"
+          :key="`remediation-${step}`"
+          class="mxc-alert"
+        >
+          {{ step }}
+        </div>
+
+        <div
+          v-if="!windowsNodeMxcStatus?.desiredEnabled"
+          class="card-group"
+          style="margin-top: 12px"
+        >
           <div class="card-row">
             <span class="row-label">{{ t("settings.sandboxEnabled") }}</span>
             <div style="display: flex; align-items: center; gap: 10px">
@@ -385,7 +866,10 @@
           </div>
         </div>
 
-        <div :class="{ 'sandbox-disabled': !sandboxStatus.enabled }">
+        <div
+          v-if="!windowsNodeMxcStatus?.desiredEnabled"
+          :class="{ 'sandbox-disabled': !sandboxStatus.enabled }"
+        >
           <!-- Sandbox capabilities (network) -->
           <div class="card-group" style="margin-top: 12px">
             <div class="card-row">
@@ -465,7 +949,13 @@
                   "
                 >
                   <span class="dir-section-label">{{ t("settings.sandboxDirsRW") }}</span>
-                  <el-button size="small" type="primary" plain @click="addSandboxDir('rw')">
+                  <el-button
+                    data-testid="sandbox-add-rw"
+                    size="small"
+                    type="primary"
+                    plain
+                    @click="addSandboxDir('rw')"
+                  >
                     {{ t("settings.sandboxAddDir") }}
                   </el-button>
                 </div>
@@ -504,7 +994,13 @@
                   "
                 >
                   <span class="dir-section-label">{{ t("settings.sandboxDirsRO") }}</span>
-                  <el-button size="small" type="primary" plain @click="addSandboxDir('ro')">
+                  <el-button
+                    data-testid="sandbox-add-ro"
+                    size="small"
+                    type="primary"
+                    plain
+                    @click="addSandboxDir('ro')"
+                  >
                     {{ t("settings.sandboxAddDir") }}
                   </el-button>
                 </div>
@@ -589,7 +1085,7 @@
                       <span class="acl-reason">{{ item.reason }}</span>
                       <button
                         class="dir-add-btn"
-                        style="margin-left: auto; font-size: 11px"
+                        style="margin-left: auto"
                         @click="repairAcl(item)"
                       >
                         修复
@@ -610,7 +1106,7 @@
                       <span class="dir-badge dir-badge-system">{{ item.rights }}</span>
                       <button
                         class="dir-add-btn"
-                        style="margin-left: auto; font-size: 11px"
+                        style="margin-left: auto"
                         @click="revokeStaleAcl(item)"
                       >
                         清除
@@ -668,23 +1164,6 @@
             <ul class="privacy-card-list">
               <li>{{ t("settings.privacyBasicDesc1") }}</li>
               <li>{{ t("settings.privacyBasicDesc2") }}</li>
-              <li>{{ t("settings.privacyBasicDesc3") }}</li>
-            </ul>
-          </div>
-          <div
-            class="privacy-card"
-            :class="{ active: settings.privacyLevel === 'balanced' }"
-            @click="setPrivacyLevel('balanced')"
-          >
-            <div class="privacy-card-header">
-              <span class="privacy-card-icon">⚖️</span>
-              <span class="privacy-card-title">{{ t("settings.privacyBalanced") }}</span>
-              <span class="privacy-badge-recommended">{{ t("settings.privacyRecommended") }}</span>
-            </div>
-            <ul class="privacy-card-list">
-              <li>{{ t("settings.privacyBalancedDesc1") }}</li>
-              <li>{{ t("settings.privacyBalancedDesc2") }}</li>
-              <li>{{ t("settings.privacyBalancedDesc3") }}</li>
             </ul>
           </div>
           <div
@@ -699,7 +1178,6 @@
             <ul class="privacy-card-list">
               <li>{{ t("settings.privacyStrictDesc1") }}</li>
               <li>{{ t("settings.privacyStrictDesc2") }}</li>
-              <li>{{ t("settings.privacyStrictDesc3") }}</li>
             </ul>
           </div>
         </div>
@@ -710,26 +1188,43 @@
         <div class="card-group">
           <div class="card-row">
             <span class="row-label">{{ t("settings.piiPhone") }}</span>
-            <el-switch v-model="piiToggles.phone" :disabled="settings.privacyLevel === 'basic'" />
+            <el-switch
+              v-model="piiToggles.phone"
+              :disabled="settings.privacyLevel === 'basic'"
+              @change="persistPrivacyControls"
+            />
           </div>
           <div class="card-row">
             <span class="row-label">{{ t("settings.piiIdCard") }}</span>
-            <el-switch v-model="piiToggles.idCard" :disabled="settings.privacyLevel === 'basic'" />
+            <el-switch
+              v-model="piiToggles.idCard"
+              :disabled="settings.privacyLevel === 'basic'"
+              @change="persistPrivacyControls"
+            />
           </div>
           <div class="card-row">
             <span class="row-label">{{ t("settings.piiBankCard") }}</span>
             <el-switch
               v-model="piiToggles.bankCard"
               :disabled="settings.privacyLevel === 'basic'"
+              @change="persistPrivacyControls"
             />
           </div>
           <div class="card-row">
             <span class="row-label">{{ t("settings.piiEmail") }}</span>
-            <el-switch v-model="piiToggles.email" :disabled="settings.privacyLevel === 'basic'" />
+            <el-switch
+              v-model="piiToggles.email"
+              :disabled="settings.privacyLevel === 'basic'"
+              @change="persistPrivacyControls"
+            />
           </div>
           <div class="card-row no-border">
             <span class="row-label">{{ t("settings.piiApiKey") }}</span>
-            <el-switch v-model="piiToggles.apiKey" :disabled="settings.privacyLevel === 'basic'" />
+            <el-switch
+              v-model="piiToggles.apiKey"
+              :disabled="settings.privacyLevel === 'basic'"
+              @change="persistPrivacyControls"
+            />
           </div>
         </div>
         <div class="section-footer">{{ t("settings.piiDetectionDesc") }}</div>
@@ -754,24 +1249,11 @@
         </div>
         <div class="section-footer">{{ t("settings.sensitiveFilesDesc") }}</div>
 
-        <!-- File Access Audit -->
-        <div class="sub-label">{{ t("settings.fileAccessAudit") }}</div>
-        <div class="card-group">
-          <div class="card-row no-border">
-            <span class="row-label">{{ t("settings.fileAccessAudit") }}</span>
-            <el-switch
-              v-model="settings.fileAccessAudit"
-              :disabled="settings.privacyLevel === 'basic'"
-            />
-          </div>
-        </div>
-        <div class="section-footer">{{ t("settings.fileAccessAuditDesc") }}</div>
-
         <!-- Chat History (existing) -->
         <div class="sub-label">{{ t("settings.chatHistory") }}</div>
         <div class="card-group">
           <div class="card-row no-border">
-            <span class="row-label">{{ t("settings.chatHistory") }}</span>
+            <span class="row-label">{{ t("settings.savedChatHistory") }}</span>
             <el-button type="danger" plain size="small" @click="clearChatHistory">{{
               t("settings.clearAllHistory")
             }}</el-button>
@@ -822,61 +1304,74 @@
             <span class="row-value">© 2026 {{ t("app.name") }}</span>
           </div>
         </div>
+        <div class="sub-label">{{ t("settings.legal") }}</div>
+        <div class="card-group legal-links">
+          <a class="card-row legal-link" :href="eulaUrl" @click.prevent="openExternal(eulaUrl)">
+            {{ t("settings.eula") }}
+          </a>
+          <a
+            class="card-row legal-link no-border"
+            :href="privacyStatementUrl"
+            @click.prevent="openExternal(privacyStatementUrl)"
+          >
+            {{ t("settings.privacyStatement") }}
+          </a>
+        </div>
       </div>
-
-      <ModelSetupDialog
-        v-model="showProviderSetup"
-        single-provider
-        @configured="handleProviderConfigured"
-      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, watch, computed, nextTick } from "vue";
+import { ref, reactive, onMounted, onUnmounted, watch, computed, defineAsyncComponent } from "vue";
 import { useRoute } from "vue-router";
 import { useGatewayStore } from "@/stores/gateway";
 import { useChatStore } from "@/stores/chat";
 import { ElMessage, ElMessageBox } from "element-plus";
 import ChannelsView from "@/views/ChannelsView.vue";
 import microclawLogo from "../../../assets/microclaw.png";
-import { t, setLocale } from "@/i18n";
+import { getLocale, t, setLocale } from "@/i18n";
 import type { Locale } from "@/i18n";
 import ModelSetupDialog from "@/components/ModelSetupDialog.vue";
-import {
-  normalizeModelInput,
-  removeModelProviderConfig,
-  selectPrimaryModelConfig,
-  retainOnlyProvider,
-  type ModelApiFormat,
-  type ModelInputCapability,
-  type ModelReasoningEffort,
-} from "@/utils/model-provider";
+import LocalModelSetupDialog from "@/components/LocalModelSetupDialog.vue";
+import LocalModelDownloadDialog from "@/components/LocalModelDownloadDialog.vue";
+import SessionModelRecoveryNotice from "@/components/SessionModelRecoveryNotice.vue";
+import type { SessionModelRecovery } from "../../../src/session-model-types";
+import DefaultModelPicker from "@/components/DefaultModelPicker.vue";
+import { mergeLocalModelCatalog } from "@/utils/local-model-catalog";
+import { isManagedLocalModel, type LocalModelCatalogEntry } from "../../../src/local-model-catalog";
+import { useLocalModelOperation } from "@/composables/use-local-model-operation";
+import { confirmLocalModelSwitch, releaseLocalModelSetup } from "@/utils/local-model-transition";
+import { getDefaultAgentModelOverride, removeModelProviderConfig } from "@/utils/model-provider";
 import {
   mergeGitHubCopilotModelEntries,
   removeGitHubCopilotModelReferences,
 } from "@/utils/auth-managed-models";
-import { getManagedModelProvider } from "@/utils/managed-model-providers";
-
+import { MANAGED_MODEL_PROVIDERS, getManagedModelProvider } from "@/utils/managed-model-providers";
+import {
+  readConfiguredModels,
+  getModelRef,
+  providerName,
+  type ConfiguredModel,
+} from "@/utils/configured-models";
+import type { LocalModelFileStatus } from "../../../src/local-model-types";
+import {
+  hydratePrivacyControls,
+  type PrivacyControls,
+  type PrivacyLevel,
+} from "@/utils/privacy-settings";
 const route = useRoute();
 const gateway = useGatewayStore();
 const chatStore = useChatStore();
-
-const logBoxRef = ref<HTMLElement | null>(null);
-
-watch(
-  () => gateway.logs.length,
-  () => {
-    nextTick(() => {
-      if (logBoxRef.value) {
-        logBoxRef.value.scrollTop = logBoxRef.value.scrollHeight;
-      }
-    });
-  },
-);
+const { operation: localOperation, refresh: refreshLocalOperation } = useLocalModelOperation();
+const devSettingsEnabled =
+  import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEV_SETTINGS === "true";
+const SkillsDevPanel = devSettingsEnabled
+  ? defineAsyncComponent(() => import("@/components/skills/SkillsDevPanel.vue"))
+  : null;
 
 const activeSection = ref("general");
+const exportingGatewayLogs = ref(false);
 const updateChecking = ref(false);
 const updateResult = ref<UpdateCheckResult | null>(null);
 
@@ -887,6 +1382,9 @@ const updateStatusTitle = computed(() => {
   }
   if (updateResult.value.status === "up-to-date") {
     return t("settings.updateUpToDate");
+  }
+  if (updateResult.value.status === "managed-by-store") {
+    return t("settings.updateManagedByStore");
   }
   return t("settings.updateCheckFailed");
 });
@@ -902,6 +1400,9 @@ const updateStatusDetail = computed(() => {
   if (updateResult.value.status === "up-to-date") {
     return t("settings.updateUpToDateDetail", { version: updateResult.value.currentVersion });
   }
+  if (updateResult.value.status === "managed-by-store") {
+    return t("settings.updateManagedByStoreDetail");
+  }
   return updateResult.value.message;
 });
 
@@ -909,8 +1410,8 @@ const VALID_SECTIONS = [
   "general",
   "usage",
   "models",
-  "gateway",
   "channels",
+  ...(devSettingsEnabled ? ["skills"] : []),
   "security",
   "privacy",
   "about",
@@ -918,7 +1419,7 @@ const VALID_SECTIONS = [
 
 function normalizeSection(section: unknown) {
   if (section === "theme") return "general";
-  if (section === "workspace") return "gateway";
+  if (section === "workspace") return "general";
   return typeof section === "string" && VALID_SECTIONS.includes(section) ? section : null;
 }
 
@@ -949,10 +1450,120 @@ const sandboxApplying = ref(false);
 /** Snapshot of external apps at load time, used to detect changes */
 let externalAppsOriginal: string[] = [];
 const sandboxUserDirs = reactive<{ rw: string[]; ro: string[] }>({ rw: [], ro: [] });
+const windowsNodeMxcFolderDraft = reactive<{ rw: string[]; ro: string[] }>({ rw: [], ro: [] });
+const windowsNodeMxcFolderBaseline = reactive<{ rw: string[]; ro: string[] }>({ rw: [], ro: [] });
 const sandboxSystemDirs = reactive<{ rw: string[]; ro: string[] }>({ rw: [], ro: [] });
 const sandboxCapabilities = ref<string[]>([]);
 const capsRestarting = ref(false);
 const sandboxRestarting = ref(false);
+type WindowsNodeMxcStatus = Awaited<ReturnType<typeof window.openclaw.windowsNodeMxc.getStatus>>;
+const windowsNodeMxcStatus = ref<WindowsNodeMxcStatus | null>(null);
+const windowsNodeMxcApplying = ref(false);
+const windowsNodeMxcFolderApplying = ref(false);
+const windowsNodeMxcTechnicalDetailsOpen = ref(false);
+const windowsNodeMxcTransitionPhases = new Set([
+  "locking",
+  "validating",
+  "persisting",
+  "starting-locked",
+  "smoking-locked",
+  "starting-active",
+  "smoking-active",
+  "verifying-active",
+  "starting-standard",
+]);
+
+const windowsNodeMxcProtectionLabel = computed(() => {
+  const status = windowsNodeMxcStatus.value;
+  if (!status?.desiredEnabled) return t("settings.windowsNodeMxcProtectionOff");
+  if (status.effectiveEnabled && status.lifecycleState.phase === "active") {
+    return t("settings.windowsNodeMxcProtected");
+  }
+  if (windowsNodeMxcTransitionPhases.has(status.lifecycleState.phase)) {
+    return t("settings.windowsNodeMxcStarting");
+  }
+  return t("settings.windowsNodeMxcActionRequired");
+});
+
+const windowsNodeMxcProtectionClass = computed(() => {
+  const status = windowsNodeMxcStatus.value;
+  if (status?.effectiveEnabled && status.lifecycleState.phase === "active") {
+    return "mxc-state-ok";
+  }
+  return status?.desiredEnabled ? "mxc-state-blocked" : "mxc-state-neutral";
+});
+
+const windowsNodeMxcProtectionDetail = computed(() => {
+  const status = windowsNodeMxcStatus.value;
+  if (
+    !status?.desiredEnabled ||
+    (status.effectiveEnabled && status.lifecycleState.phase === "active")
+  ) {
+    return "";
+  }
+  const phase = t(`settings.windowsNodeMxcLifecyclePhase.${status.lifecycleState.phase}`);
+  return status.lifecycleState.detail ? `${phase} · ${status.lifecycleState.detail}` : phase;
+});
+
+const windowsNodeMxcFolderDraftDirty = computed(
+  () => policyIdentity(windowsNodeMxcFolderDraft) !== policyIdentity(windowsNodeMxcFolderBaseline),
+);
+
+function policyIdentity(policy: { rw: string[]; ro: string[] }) {
+  const normalize = (values: string[]) =>
+    values
+      .map((value) => value.toLowerCase())
+      .sort()
+      .join("\n");
+  return `${normalize(policy.rw)}\u0000${normalize(policy.ro)}`;
+}
+
+function replaceWindowsNodeMxcFolderDraft(policy: { rw: string[]; ro: string[] }) {
+  windowsNodeMxcFolderDraft.rw.splice(0, windowsNodeMxcFolderDraft.rw.length, ...policy.rw);
+  windowsNodeMxcFolderDraft.ro.splice(0, windowsNodeMxcFolderDraft.ro.length, ...policy.ro);
+}
+
+function replaceWindowsNodeMxcFolderBaseline(policy: { rw: string[]; ro: string[] }) {
+  windowsNodeMxcFolderBaseline.rw.splice(0, windowsNodeMxcFolderBaseline.rw.length, ...policy.rw);
+  windowsNodeMxcFolderBaseline.ro.splice(0, windowsNodeMxcFolderBaseline.ro.length, ...policy.ro);
+}
+
+function updateWindowsNodeMxcStatus(status: WindowsNodeMxcStatus) {
+  windowsNodeMxcStatus.value = status;
+  const effectiveFolders = {
+    rw: status.folders.filter((entry) => entry.access === "rw").map((entry) => entry.path),
+    ro: status.folders.filter((entry) => entry.access === "ro").map((entry) => entry.path),
+  };
+  if (!windowsNodeMxcFolderDraftDirty.value || windowsNodeMxcFolderApplying.value) {
+    replaceWindowsNodeMxcFolderDraft(effectiveFolders);
+  }
+  replaceWindowsNodeMxcFolderBaseline(effectiveFolders);
+}
+
+async function loadWindowsNodeMxcStatus() {
+  try {
+    const status = await window.openclaw.windowsNodeMxc.getStatus();
+    updateWindowsNodeMxcStatus(status);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function toggleWindowsNodeMxc(enabled: boolean) {
+  windowsNodeMxcApplying.value = true;
+  gateway.resetReady();
+  chatStore.wsConnected = false;
+  try {
+    const status = await window.openclaw.windowsNodeMxc.setEnabled({ enabled });
+    updateWindowsNodeMxcStatus(status);
+    await loadSandboxStatus();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+    await loadWindowsNodeMxcStatus();
+  } finally {
+    windowsNodeMxcApplying.value = false;
+  }
+}
 
 async function loadSandboxStatus() {
   try {
@@ -1063,8 +1674,11 @@ async function _applyExternalApps() {
   }
 }
 
-async function addSandboxDir(access: "rw" | "ro") {
-  const result = await window.openclaw.sandbox.addUserDir({ access });
+async function addSandboxDir(access: "rw" | "ro", policy?: "windows-node-mxc") {
+  const result = await window.openclaw.sandbox.addUserDir({
+    access,
+    ...(policy ? { policy } : {}),
+  });
   if (result.reason === "parent-covers") {
     const accessLabel =
       result.parentAccess === "rw" ? t("settings.sandboxDirsRW") : t("settings.sandboxDirsRO");
@@ -1077,6 +1691,10 @@ async function addSandboxDir(access: "rw" | "ro") {
     ElMessage.warning(t("settings.sandboxParentRWCovers", { parentDir: result.parentDir || "" }));
     return;
   }
+  if (result.reason && policy === "windows-node-mxc") {
+    showWindowsNodeMxcFolderPolicyError(result.reason);
+    return;
+  }
   if (result.ok) {
     sandboxUserDirs.rw = result.dirs.rw;
     sandboxUserDirs.ro = result.dirs.ro;
@@ -1086,6 +1704,153 @@ async function addSandboxDir(access: "rw" | "ro") {
       );
     }
   }
+}
+
+function showWindowsNodeMxcFolderPolicyError(reason: string) {
+  const keyByReason: Record<string, string> = {
+    duplicate: "settings.windowsNodeMxcFolderDuplicate",
+    "path-nonlocal": "settings.windowsNodeMxcFolderNonlocal",
+    "path-not-found": "settings.windowsNodeMxcFolderMissing",
+    "path-reparse-point": "settings.windowsNodeMxcFolderReparse",
+    "path-sensitive": "settings.windowsNodeMxcFolderSensitive",
+    "acl-failed": "settings.windowsNodeMxcFolderAclFailed",
+    "folder-not-configured": "settings.windowsNodeMxcFolderNotConfigured",
+  };
+  ElMessage.error(t(keyByReason[reason] ?? "settings.windowsNodeMxcFolderMutationFailed"));
+}
+
+async function addWindowsNodeMxcFolder(access: "rw" | "ro") {
+  try {
+    if (!windowsNodeMxcStatus.value?.desiredEnabled) {
+      await addSandboxDir(access, "windows-node-mxc");
+      await loadWindowsNodeMxcStatus();
+      return;
+    }
+    const result = await window.openclaw.sandbox.stageUserDir({
+      access,
+      draft: {
+        rw: [...windowsNodeMxcFolderDraft.rw],
+        ro: [...windowsNodeMxcFolderDraft.ro],
+      },
+    });
+    if (result.canceled) return;
+    if (!result.ok) {
+      showWindowsNodeMxcFolderPolicyError(result.reason ?? "");
+      return;
+    }
+    replaceWindowsNodeMxcFolderDraft(result.dirs);
+    if (result.removedChildren?.length) {
+      ElMessage.info(
+        t("settings.sandboxChildrenRemoved", { count: result.removedChildren.length }),
+      );
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function changeWindowsNodeMxcFolderAccess(dir: string, access: "rw" | "ro") {
+  try {
+    if (!windowsNodeMxcStatus.value?.desiredEnabled) {
+      const result = await window.openclaw.sandbox.setUserDirAccess({ dir, access });
+      if (!result.ok) showWindowsNodeMxcFolderPolicyError(result.reason ?? "");
+      await Promise.all([loadSandboxStatus(), loadWindowsNodeMxcStatus()]);
+      return;
+    }
+    const next = {
+      rw: windowsNodeMxcFolderDraft.rw.filter((entry) => entry !== dir),
+      ro: windowsNodeMxcFolderDraft.ro.filter((entry) => entry !== dir),
+    };
+    next[access].push(dir);
+    replaceWindowsNodeMxcFolderDraft(
+      await window.openclaw.windowsNodeMxc.validateFolderPolicy(next),
+    );
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function removeWindowsNodeMxcFolder(dir: string, access: "rw" | "ro") {
+  try {
+    if (!windowsNodeMxcStatus.value?.desiredEnabled) {
+      await removeSandboxDir(dir, access);
+      await loadWindowsNodeMxcStatus();
+      return;
+    }
+    const next = {
+      rw: [...windowsNodeMxcFolderDraft.rw],
+      ro: [...windowsNodeMxcFolderDraft.ro],
+    };
+    next[access] = next[access].filter((entry) => entry !== dir);
+    replaceWindowsNodeMxcFolderDraft(
+      await window.openclaw.windowsNodeMxc.validateFolderPolicy(next),
+    );
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function applyWindowsNodeMxcFolderPolicy() {
+  try {
+    await ElMessageBox.confirm(
+      t("settings.windowsNodeMxcApplyFoldersWarning"),
+      t("settings.windowsNodeMxcApplyFolders"),
+      {
+        type: "warning",
+        confirmButtonText: t("settings.windowsNodeMxcApplyFolders"),
+        cancelButtonText: t("common.cancel"),
+      },
+    );
+  } catch {
+    return;
+  }
+  windowsNodeMxcFolderApplying.value = true;
+  try {
+    const status = await window.openclaw.windowsNodeMxc.applyFolderPolicy({
+      rw: [...windowsNodeMxcFolderDraft.rw],
+      ro: [...windowsNodeMxcFolderDraft.ro],
+    });
+    updateWindowsNodeMxcStatus(status);
+    await loadSandboxStatus();
+    ElMessage.success(t("settings.windowsNodeMxcApplyFoldersComplete"));
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+    await loadWindowsNodeMxcStatus();
+  } finally {
+    windowsNodeMxcFolderApplying.value = false;
+  }
+}
+
+function stagePreviousWindowsNodeMxcFolderPolicy() {
+  const previous = windowsNodeMxcStatus.value?.folderPolicyRecovery?.previous;
+  if (previous) replaceWindowsNodeMxcFolderDraft(previous);
+}
+
+async function revokeWindowsNodeMxcDurableApproval(id: string) {
+  try {
+    await window.openclaw.windowsNodeMxc.revokeDurableApproval(id);
+    await loadWindowsNodeMxcStatus();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function revokeAllWindowsNodeMxcDurableApprovals() {
+  try {
+    await ElMessageBox.confirm(
+      t("settings.windowsNodeMxcRevokeAllApprovalsWarning"),
+      t("settings.windowsNodeMxcRevokeAllApprovals"),
+      {
+        type: "warning",
+        confirmButtonText: t("settings.windowsNodeMxcRevokeAllApprovals"),
+        cancelButtonText: t("common.cancel"),
+      },
+    );
+  } catch {
+    return;
+  }
+  await window.openclaw.windowsNodeMxc.revokeAllDurableApprovals();
+  await loadWindowsNodeMxcStatus();
 }
 
 async function removeSandboxDir(dir: string, access: "rw" | "ro") {
@@ -1155,110 +1920,238 @@ async function revokeStaleAcl(item: { dir: string }) {
 const settings = reactive({
   language: "en-US",
   autoStart: false,
-  startMinimized: false,
+  minimizeToTray: false,
   themeMode: "light",
-  privacyLevel: "balanced" as "basic" | "balanced" | "strict",
-  fileAccessAudit: true,
+  privacyLevel: "basic" as PrivacyLevel,
 });
 
 const piiToggles = reactive({
-  phone: true,
-  idCard: true,
-  bankCard: true,
-  email: true,
-  apiKey: true,
+  phone: false,
+  idCard: false,
+  bankCard: false,
+  email: false,
+  apiKey: false,
 });
 
 // --- Models & API state ---
-type ApiFormat = ModelApiFormat;
-type ReasoningEffort = ModelReasoningEffort;
-
-interface ModelEntry {
-  providerKey: string;
-  id: string;
-  name: string;
-  source: "managed" | "custom" | "auth-managed";
-  baseUrl?: string;
-  apiKey?: string;
-  apiFormat?: ApiFormat;
-  reasoningEffort?: ReasoningEffort;
-  input?: ModelInputCapability[];
-}
-
-function normalizeApiFormat(api?: string): ApiFormat {
-  if (api === "anthropic-messages") return "anthropic";
-  if (api === "openai-responses") return "openai-responses";
-  return "openai-chat";
-}
-
-function normalizeReasoningEffort(
-  value: unknown,
-  fallback: ReasoningEffort = "off",
-): ReasoningEffort {
-  const normalized = typeof value === "string" ? value.toLowerCase() : "";
-  if (
-    normalized === "off" ||
-    normalized === "minimal" ||
-    normalized === "low" ||
-    normalized === "medium" ||
-    normalized === "high" ||
-    normalized === "xhigh" ||
-    normalized === "adaptive"
-  ) {
-    return normalized;
-  }
-  return fallback;
-}
-
-function getModelRef(model: Pick<ModelEntry, "providerKey" | "id">): string {
-  return `${model.providerKey}/${model.id}`;
-}
-
-const customModels = ref<ModelEntry[]>([]);
-const selectedModel = ref("Pony-Alpha-2");
+const customModels = ref<ConfiguredModel[]>([]);
+const selectedModel = ref("");
 const copilotModelsLoading = ref(false);
 const copilotDisconnecting = ref(false);
 const switchingModelRef = ref("");
 const removingModelRef = ref("");
 let copilotModelsGeneration = 0;
-const gatewayPort = ref("18789");
 const showProviderSetup = ref(false);
-const selectedModelEntry = computed(
-  () => customModels.value.find((model) => getModelRef(model) === selectedModel.value) ?? null,
-);
-const selectedModelIndex = computed(() =>
-  customModels.value.findIndex((model) => getModelRef(model) === selectedModel.value),
-);
-
-// Display name of the configured provider shown in the Model section.
-const currentProviderName = computed(() => {
-  const entry = selectedModelEntry.value;
-  if (!entry) return "";
-  if (entry.providerKey === "github-copilot") return "GitHub Copilot";
-  return getManagedModelProvider(entry.providerKey)?.label ?? entry.providerKey;
+const editingProviderKey = ref("");
+const editingModelRef = ref("");
+const providerSaving = ref(false);
+const modelStatusError = ref("");
+const localFileStatus = ref(new Map<string, LocalModelFileStatus>());
+const localCatalog = ref<LocalModelCatalogEntry[]>([]);
+const localProviderReady = ref(false);
+const localSelection = ref("");
+const localSelecting = ref(false);
+const sessionRecovery = ref<SessionModelRecovery | null>(null);
+const sessionRecovering = ref(false);
+const modelOptions = computed(() => mergeLocalModelCatalog(customModels.value, localCatalog.value));
+function modelOptionStatus(model: ConfiguredModel): string {
+  const preset = localCatalog.value.find((entry) => entry.modelRef === getModelRef(model));
+  if (preset && localOperation.value?.busy && localOperation.value.modelRef === preset.modelRef) {
+    return t(
+      localOperation.value.download && localOperation.value.step?.type !== "confirm"
+        ? "fixedLocal.downloading"
+        : "fixedLocal.preparing",
+    );
+  }
+  const status = preset
+    ? t(
+        preset.fileStatus === "external"
+          ? "modelManager.external"
+          : preset.fileStatus === "present"
+            ? "modelManager.downloaded"
+            : preset.fileStatus === "unknown"
+              ? "localModel.filesUnknown"
+              : "fixedLocal.notDownloaded",
+      )
+    : localFileStatus.value.get(getModelRef(model)) === "missing"
+      ? t("localModel.filesMissing")
+      : "";
+  return status;
+}
+let localSnapshotRevision = 0;
+const providerCards = computed(() => {
+  const keys = new Set([
+    "github-copilot",
+    ...MANAGED_MODEL_PROVIDERS.map((provider) => provider.id),
+    "llama-cpp",
+    ...customModels.value.map((model) => model.providerKey),
+  ]);
+  return [...keys].map((key) => {
+    const models = customModels.value.filter((model) => model.providerKey === key);
+    return {
+      key,
+      label:
+        key === "llama-cpp"
+          ? t("localModel.title")
+          : key === "custom"
+            ? t("modelManager.compatibleApi")
+            : providerName(key),
+      models,
+      editableModels: key === "github-copilot" ? [] : models,
+      missing: models.some((model) => localFileStatus.value.get(getModelRef(model)) === "missing"),
+    };
+  });
 });
+const editingFamily = computed(
+  () =>
+    getManagedModelProvider(editingProviderKey.value)?.id ??
+    (editingProviderKey.value === "github-copilot" ? "github-copilot" : "custom"),
+);
+const providerPrefill = computed(() => {
+  const model = customModels.value.find((item) => getModelRef(item) === editingModelRef.value);
+  if (!model) return null;
+  return {
+    familyId: editingFamily.value,
+    providerKey: model.providerKey,
+    modelName: model.id,
+    displayName: model.name,
+    baseUrl: model.baseUrl ?? "",
+    apiKey: model.apiKey ?? "",
+    apiFormat: model.apiFormat ?? ("openai-chat" as const),
+    reasoningEffort: model.reasoningEffort,
+    input: model.input,
+  };
+});
+const showLocalSetup = ref(false);
+const localTargetModel = ref<string>();
+const defaultAgentOverride = ref<ReturnType<typeof getDefaultAgentModelOverride>>(null);
+const removableLocalConnections = computed(() =>
+  customModels.value
+    .filter(
+      (model) =>
+        model.providerKey === "llama-cpp" &&
+        getModelRef(model) !== selectedModel.value &&
+        getModelRef(model) !== defaultAgentOverride.value?.modelRef,
+    )
+    .map((model) => ({ modelRef: getModelRef(model), name: model.name })),
+);
+const cloudTransition = ref(false);
+let modelViewDisposed = false;
+const modelActionBusy = computed(() =>
+  Boolean(
+    switchingModelRef.value ||
+    removingModelRef.value ||
+    copilotDisconnecting.value ||
+    cloudTransition.value ||
+    providerSaving.value ||
+    sessionRecovering.value ||
+    localSelecting.value,
+  ),
+);
+const modelMutationBlocked = computed(() =>
+  Boolean(
+    switchingModelRef.value ||
+    removingModelRef.value ||
+    copilotDisconnecting.value ||
+    cloudTransition.value ||
+    providerSaving.value ||
+    sessionRecovery.value ||
+    sessionRecovering.value ||
+    localSelecting.value ||
+    chatStore.streaming ||
+    localOperation.value?.busy,
+  ),
+);
+function openLocalModel(modelRef?: string) {
+  if (modelActionBusy.value) return;
+  localTargetModel.value = modelRef;
+  showLocalSetup.value = true;
+}
+
+async function prepareCloudChange(): Promise<boolean> {
+  cloudTransition.value = true;
+  try {
+    const release = await releaseLocalModelSetup(
+      window.openclaw.model.local,
+      confirmLocalModelSwitch,
+      () => !modelViewDisposed,
+    );
+    await refreshLocalOperation();
+    if (release === "pending") {
+      ElMessage.info(t("localModel.setupFinishing"));
+      showLocalSetup.value = true;
+      return false;
+    }
+    return release === "ready" && !modelViewDisposed;
+  } finally {
+    cloudTransition.value = false;
+  }
+}
+
+function openCloudSetup(providerKey: string, model?: ConfiguredModel): void {
+  if (modelActionBusy.value) return;
+  editingProviderKey.value = providerKey;
+  const entry = model ?? customModels.value.find((item) => item.providerKey === providerKey);
+  editingModelRef.value = entry ? getModelRef(entry) : `new:${providerKey}`;
+  showProviderSetup.value = true;
+}
+watch(
+  () => route.query?.provider,
+  (provider) => {
+    if (provider === "llama-cpp") openLocalModel();
+  },
+  { immediate: true },
+);
 
 // --- Web search providers ---
-type SearchProviderId = "brave" | "tavily";
+type SearchProviderId = "parallel-free" | "brave" | "tavily";
 const searchProviders: {
   id: SearchProviderId;
   name: string;
   placeholder: string;
   link: string;
+  requiresKey: boolean;
 }[] = [
-  { id: "brave", name: "Brave", placeholder: "BSA...", link: "https://brave.com/search/api/" },
-  { id: "tavily", name: "Tavily", placeholder: "tvly-...", link: "https://tavily.com/" },
+  {
+    id: "parallel-free",
+    name: "Parallel",
+    placeholder: "",
+    link: "https://parallel.ai/",
+    requiresKey: false,
+  },
+  {
+    id: "brave",
+    name: "Brave",
+    placeholder: "BSA...",
+    link: "https://brave.com/search/api/",
+    requiresKey: true,
+  },
+  {
+    id: "tavily",
+    name: "Tavily",
+    placeholder: "tvly-...",
+    link: "https://tavily.com/",
+    requiresKey: true,
+  },
 ];
-const searchProvider = ref<SearchProviderId>("brave");
-const searchKeys = reactive<Record<SearchProviderId, string>>({ brave: "", tavily: "" });
+const searchProvider = ref<SearchProviderId>("parallel-free");
+const searchKeys = reactive<Record<SearchProviderId, string>>({
+  "parallel-free": "",
+  brave: "",
+  tavily: "",
+});
 // The provider metadata (placeholder, docs link) for the currently selected provider.
 const activeSearchProvider = computed(
   () => searchProviders.find((p) => p.id === searchProvider.value) ?? searchProviders[0],
 );
 // Snapshot of the last persisted state, used to drive the "Configured" status and the
 // enabled/disabled state of the single Save button.
-const savedSearchProvider = ref<SearchProviderId>("brave");
-const savedSearchKeys = reactive<Record<SearchProviderId, string>>({ brave: "", tavily: "" });
+const savedSearchProvider = ref<SearchProviderId>("parallel-free");
+const savedSearchKeys = reactive<Record<SearchProviderId, string>>({
+  "parallel-free": "",
+  brave: "",
+  tavily: "",
+});
 const searchSavingAll = ref(false);
 const searchDirty = computed(() => {
   if (searchProvider.value !== savedSearchProvider.value) return true;
@@ -1343,8 +2236,8 @@ const svg = {
   general: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5h3M10 5h7M3 10h7M14 10h3M3 15h2M9 15h8"/><circle cx="8" cy="5" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="7" cy="15" r="2"/></svg>`,
   usage: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="3" height="5" rx="1"/><rect x="8.5" y="8" width="3" height="9" rx="1"/><rect x="14" y="4" width="3" height="13" rx="1"/></svg>`,
   models: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="9" height="9" rx="2"/><path d="M8 3v2.5M12 3v2.5M8 14.5V17M12 14.5V17M3 8h2.5M3 12h2.5M14.5 8H17M14.5 12H17"/><path d="m10 7 .7 2.3L13 10l-2.3.7L10 13l-.7-2.3L7 10l2.3-.7L10 7z"/></svg>`,
-  gateway: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="6" rx="1.5"/><rect x="3" y="11" width="14" height="6" rx="1.5"/><circle cx="6" cy="6" r=".75" fill="currentColor" stroke="none"/><circle cx="6" cy="14" r=".75" fill="currentColor" stroke="none"/><path d="M9 6h5M9 14h5"/></svg>`,
   channels: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="10" cy="10" r="1.5" fill="currentColor" stroke="none"/><path d="M6.8 6.8a4.5 4.5 0 0 0 0 6.4M13.2 6.8a4.5 4.5 0 0 1 0 6.4M4.4 4.4a8 8 0 0 0 0 11.2M15.6 4.4a8 8 0 0 1 0 11.2"/></svg>`,
+  skills: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5a2.5 2.5 0 0 1 5 0v2h2a2.5 2.5 0 1 1 0 5h-2v2a2.5 2.5 0 1 1-5 0v-2h-2a2.5 2.5 0 1 1 0-5h2v-2z"/></svg>`,
   security: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2l6 3v5c0 4-2.5 6.5-6 8-3.5-1.5-6-4-6-8V5l6-3z"/><path d="M7.5 10l2 2 3.5-4"/></svg>`,
   privacy: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="12" height="9" rx="2"/><path d="M7 9V6a3 3 0 0 1 6 0v3"/><circle cx="10" cy="14" r="1" fill="currentColor" stroke="none"/></svg>`,
   about: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 9v5"/><circle cx="10" cy="6.5" r="0.75" fill="currentColor" stroke="none"/></svg>`,
@@ -1354,8 +2247,10 @@ const menuItems = computed(() => [
   { id: "general", label: t("settings.menu.general"), color: "#636366", svg: svg.general },
   { id: "usage", label: t("settings.menu.usage"), color: "#636366", svg: svg.usage },
   { id: "models", label: t("settings.menu.models"), color: "#636366", svg: svg.models },
-  { id: "gateway", label: t("settings.menu.gateway"), color: "#636366", svg: svg.gateway },
   { id: "channels", label: t("settings.menu.channels"), color: "#636366", svg: svg.channels },
+  ...(devSettingsEnabled
+    ? [{ id: "skills", label: t("settings.menu.skills"), color: "#636366", svg: svg.skills }]
+    : []),
   { id: "security", label: t("settings.menu.security"), color: "#636366", svg: svg.security },
   { id: "privacy", label: t("settings.menu.privacy"), color: "#636366", svg: svg.privacy },
   { id: "about", label: t("settings.menu.about"), color: "#636366", svg: svg.about },
@@ -1381,13 +2276,17 @@ watch(
     setLocale(v as Locale);
   },
 );
+
+watch(activeSection, (section) => {
+  if (section === "security") windowsNodeMxcTechnicalDetailsOpen.value = false;
+});
 watch(
   () => settings.autoStart,
   (v) => window.openclaw.settings.set("autoStart", v),
 );
 watch(
-  () => settings.startMinimized,
-  (v) => window.openclaw.settings.set("startMinimized", v),
+  () => settings.minimizeToTray,
+  (v) => window.openclaw.settings.set("minimizeToTray", v),
 );
 watch(
   () => settings.themeMode,
@@ -1397,32 +2296,26 @@ watch(
   },
 );
 
-function setPrivacyLevel(level: "basic" | "balanced" | "strict") {
+function currentPrivacyControls(): PrivacyControls {
+  return { ...piiToggles };
+}
+
+function applyPrivacyControls(controls: PrivacyControls) {
+  piiToggles.phone = controls.phone;
+  piiToggles.idCard = controls.idCard;
+  piiToggles.bankCard = controls.bankCard;
+  piiToggles.email = controls.email;
+  piiToggles.apiKey = controls.apiKey;
+}
+
+function persistPrivacyControls() {
+  return window.openclaw.settings.set("privacyControls", currentPrivacyControls());
+}
+
+function setPrivacyLevel(level: PrivacyLevel) {
   settings.privacyLevel = level;
-  window.openclaw.settings.set("privacyLevel", level);
-  // Auto-configure PII toggles based on level
-  if (level === "basic") {
-    piiToggles.phone = false;
-    piiToggles.idCard = false;
-    piiToggles.bankCard = false;
-    piiToggles.email = false;
-    piiToggles.apiKey = false;
-    settings.fileAccessAudit = false;
-  } else if (level === "balanced") {
-    piiToggles.phone = true;
-    piiToggles.idCard = true;
-    piiToggles.bankCard = true;
-    piiToggles.email = true;
-    piiToggles.apiKey = true;
-    settings.fileAccessAudit = true;
-  } else {
-    piiToggles.phone = true;
-    piiToggles.idCard = true;
-    piiToggles.bankCard = true;
-    piiToggles.email = true;
-    piiToggles.apiKey = true;
-    settings.fileAccessAudit = true;
-  }
+  applyPrivacyControls(hydratePrivacyControls(level));
+  void Promise.all([window.openclaw.settings.set("privacyLevel", level), persistPrivacyControls()]);
 }
 
 // --- Auto-load data when tab is selected ---
@@ -1434,65 +2327,41 @@ watch(activeSection, (v) => {
     void refreshModelsConfig();
   }
   if (v === "security") {
-    loadSandboxStatus();
+    void Promise.all([loadSandboxStatus(), loadWindowsNodeMxcStatus()]);
   }
 });
 
 function applyModelsConfig(config: any): void {
-  const providers = config.models?.providers ?? {};
-  const modelDefaults = config.agents?.defaults?.models ?? {};
-  const defaultModelConfig = config.agents?.defaults?.model;
-  const primary =
-    typeof defaultModelConfig === "string" ? defaultModelConfig : defaultModelConfig?.primary;
-  const loaded: ModelEntry[] = [];
-  for (const [key, val] of Object.entries(providers) as [string, any][]) {
-    const managedProvider = getManagedModelProvider(key);
-    const models = val.models ?? [];
-    for (const m of models) {
-      const modelId = m.id ?? key;
-      const modelRef = `${key}/${modelId}`;
-      const managedModel = managedProvider?.models.find((model) => model.id === modelId);
-      const apiFormat = normalizeApiFormat(val.api);
-      const reasoningFallback =
-        m.reasoning === true || apiFormat === "openai-responses" ? "low" : "off";
-      loaded.push({
-        providerKey: key,
-        id: modelId,
-        name: m.name ?? managedModel?.name ?? modelId ?? key,
-        source: managedProvider ? "managed" : "custom",
-        baseUrl: val.baseUrl ?? "",
-        apiKey: val.apiKey ?? "",
-        apiFormat,
-        reasoningEffort: normalizeReasoningEffort(
-          modelDefaults[modelRef]?.params?.thinking,
-          reasoningFallback,
-        ),
-        input: normalizeModelInput(m.input ?? managedModel?.input),
-      });
-    }
-  }
-  if (
-    typeof primary === "string" &&
-    primary.startsWith("github-copilot/") &&
-    !loaded.some((model) => getModelRef(model) === primary)
-  ) {
-    const modelId = primary.slice("github-copilot/".length);
-    loaded.unshift({
-      providerKey: "github-copilot",
-      id: modelId,
-      name: modelId,
-      source: "auth-managed",
-    });
-  }
-  customModels.value = loaded;
+  defaultAgentOverride.value = getDefaultAgentModelOverride(config);
+  const parsed = readConfiguredModels(config);
+  customModels.value = parsed.models;
+  selectedModel.value = parsed.primary;
+  void loadLocalFileStatus();
+}
 
-  if (primary) {
-    const matched = loaded.find((model) => getModelRef(model) === primary);
-    selectedModel.value = matched ? getModelRef(matched) : primary;
-  } else if (loaded.length > 0) {
-    selectedModel.value = getModelRef(loaded[0]);
-  } else {
-    selectedModel.value = "";
+async function loadLocalFileStatus(): Promise<void> {
+  const revision = ++localSnapshotRevision;
+  localFileStatus.value = new Map();
+  localProviderReady.value = false;
+  try {
+    const [result, capabilities] = await Promise.all([
+      window.openclaw.model.local.getSnapshot(),
+      window.openclaw.model.local.getCapabilities(),
+    ]);
+    if (modelViewDisposed || revision !== localSnapshotRevision) return;
+    if (!result.ok) throw new Error(result.error);
+    localCatalog.value = result.value.catalog ?? [];
+    localFileStatus.value = new Map(
+      result.value.models.map((model) => [model.modelRef, model.fileStatus ?? "unknown"]),
+    );
+    if (!capabilities.ok) throw new Error(capabilities.error);
+    localProviderReady.value =
+      capabilities.value.supported &&
+      capabilities.value.plugin.installed &&
+      capabilities.value.plugin.enabled;
+  } catch (error) {
+    if (!modelViewDisposed && revision === localSnapshotRevision)
+      modelStatusError.value = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -1516,6 +2385,7 @@ async function loadSettingsGitHubCopilotModels(): Promise<void> {
   } catch (error) {
     if (generation !== copilotModelsGeneration) return;
     console.warn("[settings] Could not load GitHub Copilot models:", error);
+    modelStatusError.value = error instanceof Error ? error.message : String(error);
   } finally {
     if (generation === copilotModelsGeneration) copilotModelsLoading.value = false;
   }
@@ -1523,65 +2393,72 @@ async function loadSettingsGitHubCopilotModels(): Promise<void> {
 
 async function refreshModelsConfig(): Promise<void> {
   try {
+    modelStatusError.value = "";
     const config = await window.openclaw.config.read();
     if (!config) return;
     applyModelsConfig(config);
     void loadSettingsGitHubCopilotModels();
   } catch (error) {
     console.warn("[settings] Failed to refresh model configuration:", error);
+    modelStatusError.value = error instanceof Error ? error.message : String(error);
   }
 }
 
 function handleSettingsWindowFocus(): void {
   if (activeSection.value === "models" && !showProviderSetup.value) {
     void refreshModelsConfig();
+  } else if (activeSection.value === "security") {
+    void loadWindowsNodeMxcStatus();
   }
 }
 
 watch(showProviderSetup, (visible, wasVisible) => {
+  if (wasVisible && !visible) {
+    editingProviderKey.value = "";
+    void refreshModelsConfig();
+  }
+});
+watch(showLocalSetup, (visible, wasVisible) => {
   if (wasVisible && !visible) void refreshModelsConfig();
 });
 
 onMounted(async () => {
   window.addEventListener("focus", handleSettingsWindowFocus);
-
   // Load persisted app settings
   const saved = await window.openclaw.settings.get();
   if (saved) {
     settings.language = saved.language ?? "en-US";
     settings.autoStart = saved.autoStart ?? false;
-    settings.startMinimized = saved.startMinimized ?? false;
+    settings.minimizeToTray = saved.minimizeToTray ?? false;
     settings.themeMode = saved.themeMode ?? "light";
-    settings.privacyLevel = (saved.privacyLevel ?? "balanced") as "basic" | "balanced" | "strict";
-    // Init PII toggles based on loaded privacy level
-    if (settings.privacyLevel === "basic") {
-      piiToggles.phone = false;
-      piiToggles.idCard = false;
-      piiToggles.bankCard = false;
-      piiToggles.email = false;
-      piiToggles.apiKey = false;
-      settings.fileAccessAudit = false;
+    const savedPrivacyLevel: string | undefined = saved.privacyLevel;
+    settings.privacyLevel = savedPrivacyLevel === "strict" ? "strict" : "basic";
+    applyPrivacyControls(hydratePrivacyControls(settings.privacyLevel, saved.privacyControls));
+    await persistPrivacyControls();
+    if (savedPrivacyLevel === "balanced") {
+      await window.openclaw.settings.set("privacyLevel", "basic");
     }
   }
 
-  // Load existing config for models & gateway
+  // Load existing model config
   const config = await window.openclaw.config.read();
   if (config) {
-    // Gateway port
-    gatewayPort.value = String(config.gateway?.port ?? (gateway.port || 18789));
-
     applyModelsConfig(config);
     void loadSettingsGitHubCopilotModels();
   }
 
   // Load web search provider configuration
   loadSearchConfig(config);
-
+  if (activeSection.value === "security") {
+    await Promise.all([loadSandboxStatus(), loadWindowsNodeMxcStatus()]);
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener("focus", handleSettingsWindowFocus);
   copilotModelsGeneration += 1;
+  localSnapshotRevision += 1;
+  modelViewDisposed = true;
 });
 
 // --- Model & Gateway actions ---
@@ -1589,6 +2466,12 @@ onUnmounted(() => {
 async function handleProviderConfigured(): Promise<void> {
   await refreshModelsConfig();
   ElMessage.success(t("settings.providerConfigured"));
+}
+
+async function handleLocalModelSelected(): Promise<void> {
+  const model = localSelection.value;
+  await refreshModelsConfig();
+  ElMessage.success(t("settings.modelSwitched", { model }));
 }
 
 async function restartGatewayAfterModelConfig(
@@ -1600,58 +2483,45 @@ async function restartGatewayAfterModelConfig(
   }
 }
 
-async function persistAndRestart(
-  mutate: (config: Record<string, unknown>) => Record<string, unknown>,
-  successMsg: string,
-): Promise<boolean> {
-  try {
-    const existing = await window.openclaw.config.read();
-    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
-      throw new Error("OpenClaw configuration is unavailable");
-    }
-    const nextConfig = mutate(existing);
-    await window.openclaw.config.write(nextConfig);
-  } catch (err: any) {
-    ElMessage.error(t("settings.configSaveFailed", { error: err.message || err }));
-    await refreshModelsConfig();
-    return false;
-  }
-  try {
-    await restartGatewayAfterModelConfig();
-  } catch (err: any) {
-    ElMessage.error(t("settings.restartFailed", { error: err.message || err }));
-    await refreshModelsConfig();
-    return false;
-  }
-  await refreshModelsConfig();
-  ElMessage.success(successMsg);
-  return true;
-}
-
 async function selectModel(modelRef: string) {
-  if (switchingModelRef.value || removingModelRef.value || copilotDisconnecting.value) return;
-  if (!customModels.value.some((model) => getModelRef(model) === modelRef)) {
+  if (modelActionBusy.value || chatStore.streaming || sessionRecovery.value) return;
+  if (!modelOptions.value.some((model) => getModelRef(model) === modelRef)) {
     ElMessage.error(t("settings.configSaveFailed", { error: `Unknown model "${modelRef}"` }));
     return;
   }
-  switchingModelRef.value = modelRef;
+  if (modelRef.startsWith("llama-cpp/")) {
+    if (isManagedLocalModel(modelRef)) {
+      if (!localProviderReady.value) {
+        openLocalModel();
+        return;
+      }
+      localSelection.value = modelRef;
+      return;
+    }
+    openLocalModel(modelRef);
+    return;
+  }
   try {
-    await persistAndRestart(
-      (config) => {
-        const selected = selectPrimaryModelConfig(config, modelRef);
-        // Keep only the active model's provider so the config never accumulates stale providers.
-        const providerKey = modelRef.split("/")[0];
-        return retainOnlyProvider(selected, providerKey);
-      },
-      t("settings.modelSwitched", { model: modelRef }),
-    );
+    if (!(await prepareCloudChange())) return;
+    switchingModelRef.value = modelRef;
+    const expectedConfig = await window.openclaw.config.read();
+    if (chatStore.streaming || localOperation.value?.busy)
+      throw new Error(t("localModel.operationBusy"));
+    const selected = await window.openclaw.model.selectDefault({ modelRef, expectedConfig });
+    if (selected.modelRef !== modelRef)
+      throw new Error("The Gateway did not confirm the selected default model");
+    await refreshModelsConfig();
+    ElMessage.success(t("settings.modelSwitched", { model: modelRef }));
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+    await refreshModelsConfig();
   } finally {
     switchingModelRef.value = "";
   }
 }
 
 async function removeCustomModel(idx: number) {
-  if (switchingModelRef.value || removingModelRef.value || copilotDisconnecting.value) return;
+  if (modelMutationBlocked.value) return;
   const removed = customModels.value[idx];
   if (!removed || removed.source === "auth-managed") return;
   const modelRef = getModelRef(removed);
@@ -1664,13 +2534,24 @@ async function removeCustomModel(idx: number) {
     if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
       throw new Error("OpenClaw configuration is unavailable");
     }
+    const defaultSelector = existing.agents?.defaults?.model;
+    const primary =
+      typeof defaultSelector === "string" ? defaultSelector : defaultSelector?.primary;
+    if (removed.providerKey === "llama-cpp" && primary === modelRef) {
+      throw new Error(t("localModel.selectBeforeRemove"));
+    }
+    if (primary === modelRef && fallback?.providerKey === "llama-cpp") {
+      throw new Error(t("localModel.selectBeforeRemove"));
+    }
+    if (chatStore.streaming || localOperation.value?.busy)
+      throw new Error(t("localModel.operationBusy"));
     const nextConfig = removeModelProviderConfig(
       existing,
       removed.providerKey,
       removed.id,
       fallback ? getModelRef(fallback) : undefined,
     );
-    await window.openclaw.config.write(nextConfig);
+    await window.openclaw.config.write(nextConfig, existing);
     applyModelsConfig(nextConfig);
     ElMessage.success(t("settings.customModelDeleted"));
   } catch (err: any) {
@@ -1690,20 +2571,29 @@ async function removeCustomModel(idx: number) {
   }
 }
 
+async function removeLocalConnection(modelRef: string): Promise<void> {
+  if (!removableLocalConnections.value.some((model) => model.modelRef === modelRef)) return;
+  await removeCustomModel(customModels.value.findIndex((model) => getModelRef(model) === modelRef));
+  if (!customModels.value.some((model) => getModelRef(model) === modelRef))
+    showLocalSetup.value = false;
+}
+
 async function disconnectGitHubCopilot() {
-  if (switchingModelRef.value || removingModelRef.value || copilotDisconnecting.value) return;
+  if (modelMutationBlocked.value) return;
   try {
-    await ElMessageBox.confirm(
-      t("settings.copilotDisconnectConfirm"),
-      t("settings.confirm"),
-      { type: "warning" },
-    );
+    await ElMessageBox.confirm(t("settings.copilotDisconnectConfirm"), t("settings.confirm"), {
+      type: "warning",
+    });
   } catch {
     return;
   }
+  if (modelMutationBlocked.value) return;
 
   const fallbackModel = customModels.value.find(
-    (model) => model.providerKey !== "github-copilot" && model.source !== "auth-managed",
+    (model) =>
+      model.providerKey !== "github-copilot" &&
+      model.providerKey !== "llama-cpp" &&
+      model.source !== "auth-managed",
   );
   const fallbackModelRef = fallbackModel ? getModelRef(fallbackModel) : undefined;
   copilotDisconnecting.value = true;
@@ -1716,7 +2606,7 @@ async function disconnectGitHubCopilot() {
       throw new Error(t("settings.copilotConfigUnavailable"));
     }
     const nextConfig = removeGitHubCopilotModelReferences(existingConfig, fallbackModelRef);
-    await window.openclaw.config.write(nextConfig);
+    await window.openclaw.config.write(nextConfig, existingConfig);
 
     await window.openclaw.model.disconnectGitHubCopilot();
 
@@ -1747,7 +2637,7 @@ async function disconnectGitHubCopilot() {
 
 function loadSearchConfig(config: any): void {
   const active = config?.tools?.web?.search;
-  if (active?.provider === "brave" || active?.provider === "tavily") {
+  if (searchProviders.some((provider) => provider.id === active?.provider)) {
     const provider: SearchProviderId = active.provider;
     searchProvider.value = provider;
     if (typeof active.apiKey === "string" && active.apiKey) {
@@ -1773,7 +2663,9 @@ async function persistSearchConfig(): Promise<void> {
   config.tools.web = config.tools.web || {};
   delete config.tools.web.searchProviders;
   const activeKey = searchKeys[searchProvider.value].trim();
-  if (activeKey) {
+  if (!activeSearchProvider.value.requiresKey) {
+    config.tools.web.search = { provider: searchProvider.value };
+  } else if (activeKey) {
     config.tools.web.search = { provider: searchProvider.value, apiKey: activeKey };
   } else {
     delete config.tools.web.search;
@@ -1800,6 +2692,13 @@ function openExternal(url: string) {
   window.openclaw.shell.openExternal(url);
 }
 
+const privacyStatementUrl = "https://www.microsoft.com/privacy/privacystatement";
+const eulaUrl = computed(() =>
+  getLocale() === "zh-CN"
+    ? "https://microclaw.microsoft.com/eula.html"
+    : "https://microclaw.microsoft.com/eula.en.html",
+);
+
 async function checkForUpdates() {
   updateChecking.value = true;
   try {
@@ -1808,6 +2707,8 @@ async function checkForUpdates() {
       ElMessage.success(t("settings.updateAvailableToast"));
     } else if (updateResult.value.status === "up-to-date") {
       ElMessage.success(t("settings.updateUpToDate"));
+    } else if (updateResult.value.status === "managed-by-store") {
+      ElMessage.success(t("settings.updateManagedByStore"));
     } else {
       ElMessage.error(t("settings.updateCheckFailed"));
     }
@@ -1838,21 +2739,18 @@ async function restartGateway() {
   }
 }
 
-async function saveGatewayPort() {
-  const port = parseInt(gatewayPort.value, 10);
-  if (!port || port < 1 || port > 65535) {
-    ElMessage.warning(t("settings.invalidPort"));
-    return;
-  }
+async function exportGatewayLogs() {
+  if (exportingGatewayLogs.value || gateway.logs.length === 0) return;
+  exportingGatewayLogs.value = true;
   try {
-    const config = (await window.openclaw.config.read()) || {};
-    config.gateway = config.gateway || {};
-    config.gateway.port = port;
-    await window.openclaw.config.write(config);
-    await window.openclaw.gateway.restart();
-    ElMessage.success(t("settings.portUpdated"));
+    const result = await window.openclaw.logs.exportGateway([...gateway.logs]);
+    if (!result.canceled) {
+      ElMessage.success(t("settings.gatewayLogsExported"));
+    }
   } catch (err: any) {
-    ElMessage.error(t("settings.portUpdateFailed", { error: err.message }));
+    ElMessage.error(t("settings.gatewayLogsExportFailed", { error: err.message }));
+  } finally {
+    exportingGatewayLogs.value = false;
   }
 }
 
@@ -1874,6 +2772,114 @@ async function clearChatHistory() {
 </script>
 
 <style scoped>
+.model-settings-section {
+  max-width: 1040px;
+}
+.model-section-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.provider-description {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0 0 16px;
+}
+.provider-error {
+  color: var(--el-color-danger);
+  font-size: 13px;
+}
+.provider-cards {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 28px;
+}
+.provider-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 12px;
+  background: var(--el-fill-color-blank);
+  overflow: hidden;
+}
+.provider-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+}
+.provider-card-title {
+  flex: 1;
+  min-width: 0;
+}
+.provider-card-title strong {
+  font-size: 16px;
+}
+.provider-runtime {
+  margin-left: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.provider-card-title p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 6px 0 0;
+}
+.provider-state {
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.provider-state.warning {
+  color: var(--el-color-warning-dark-2);
+}
+.provider-editor {
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.provider-model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 24px;
+  font-size: 13px;
+}
+.provider-model-row > span:first-child {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.default-model-card {
+  margin-bottom: 12px;
+}
+.model-search-selector {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.model-search-hint {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+@media (max-width: 700px) {
+  .provider-card-heading {
+    gap: 8px;
+    padding: 14px;
+    flex-wrap: wrap;
+  }
+  .provider-card-title {
+    flex-basis: 60%;
+  }
+}
+.local-setup-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 4px 20px;
+  color: var(--smtc-foreground-ctrl-neutral-secondary-rest, #666);
+  font-size: 13px;
+}
+
 .settings-view {
   display: flex;
   flex: 1;
@@ -1893,33 +2899,27 @@ async function clearChatHistory() {
   padding: 20px 0 12px;
 }
 
-.settings-title {
-  padding: 0 16px 16px;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.02em;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .menu-list {
   flex: 1;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .settings-menu-item {
+  min-height: 36px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px 7px 16px;
+  padding: 8px 12px 8px 16px;
   cursor: pointer;
   border-radius: 8px;
-  margin: 1px 8px;
+  margin: 0 8px;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 400;
+  line-height: 20px;
   transition: background 0.1s;
 }
 
@@ -1965,6 +2965,12 @@ async function clearChatHistory() {
   overflow-y: auto;
   padding: 28px clamp(16px, 3vw, 32px);
   container-type: inline-size;
+}
+
+.settings-content--skills {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
 }
 
 .section-label,
@@ -2022,15 +3028,6 @@ async function clearChatHistory() {
     max-width: 100%;
   }
 
-  .port-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .port-input-group {
-    width: 100%;
-  }
-
   .budget-bar-wrapper {
     width: 100%;
     align-items: flex-start;
@@ -2058,6 +3055,29 @@ async function clearChatHistory() {
   color: var(--text-primary);
   flex-shrink: 1;
   min-width: 0;
+}
+
+.language-select {
+  width: 140px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.language-select:hover {
+  border-color: var(--text-muted);
+}
+
+.language-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .row-value {
@@ -2125,6 +3145,21 @@ async function clearChatHistory() {
 
 .update-check-btn {
   margin-top: 10px;
+}
+
+.legal-links {
+  margin-top: 0;
+}
+
+.legal-link {
+  color: var(--el-color-primary);
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.legal-link:hover {
+  text-decoration: underline;
 }
 
 .update-card {
@@ -2227,18 +3262,6 @@ async function clearChatHistory() {
   width: 360px;
 }
 
-.port-row {
-  align-items: flex-start;
-  padding: 20px;
-  gap: 16px;
-  min-height: 80px;
-}
-
-.port-info {
-  flex: 1;
-  min-width: 0;
-}
-
 .search-provider-group {
   display: flex;
   flex-direction: column;
@@ -2319,80 +3342,122 @@ async function clearChatHistory() {
   opacity: 0.8;
 }
 
-.port-title {
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--text-primary);
-}
-
-.port-input-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px 8px 4px 12px;
-}
-
-.port-prefix {
-  font-size: 13px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.gateway-log-box {
-  margin-top: 8px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  height: 240px;
-  overflow: hidden;
-  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
-  font-size: 12px;
-}
-
-.gateway-log-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--text-muted);
-}
-
-.gateway-log-content {
-  height: 100%;
-  overflow-y: auto;
-  padding: 10px 14px;
-}
-
-.gateway-log-line {
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.6;
-  color: var(--text-primary);
-}
-
-.port-input-group :deep(.el-input__wrapper) {
-  box-shadow: none !important;
-  background: transparent;
-  padding: 0;
-}
-
-.port-input-group :deep(.el-input__inner) {
-  font-size: 13px;
-  text-align: center;
-  font-weight: 400;
-}
-
 .settings-view :deep(.el-input__inner),
 .settings-view :deep(.el-select__selected-item),
-.settings-view :deep(.el-radio__label),
-.settings-view :deep(.el-button) {
+.settings-view :deep(.el-radio__label) {
   font-family: inherit;
   font-size: 13px;
   font-weight: 400;
+}
+
+.settings-view :deep(.el-button) {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--settings-action-border);
+  border-radius: 6px;
+  background: var(--settings-action-bg);
+  color: var(--settings-action-fg);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  transition:
+    background 0.1s,
+    border-color 0.1s,
+    color 0.1s;
+}
+
+.settings-view :deep(.el-button:hover) {
+  border-color: var(--settings-action-border);
+  background: var(--settings-action-hover);
+  color: var(--settings-action-fg);
+}
+
+.settings-view :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.settings-view :deep(.el-button:active) {
+  background: var(--settings-action-active);
+}
+
+.settings-view :deep(.el-button:focus-visible),
+.tag-remove:focus-visible,
+.tag-add-btn:focus-visible,
+.dir-add-btn:focus-visible {
+  outline: 2px solid var(--settings-action-focus);
+  outline-offset: 2px;
+}
+
+.settings-view :deep(.el-button--primary:not(.is-plain, .is-text)) {
+  border-color: var(--settings-action-primary);
+  background: var(--settings-action-primary);
+  color: var(--settings-action-primary-fg);
+}
+
+.settings-view :deep(.el-button--primary:not(.is-plain, .is-text):hover) {
+  border-color: var(--settings-action-primary-hover);
+  background: var(--settings-action-primary-hover);
+  color: var(--settings-action-primary-fg);
+}
+
+.settings-view :deep(.el-button--primary:not(.is-plain, .is-text):active) {
+  border-color: var(--settings-action-primary-active);
+  background: var(--settings-action-primary-active);
+}
+
+.settings-view :deep(.el-button.is-plain) {
+  border-color: var(--settings-action-border);
+  background: transparent;
+  color: var(--settings-action-fg);
+}
+
+.settings-view :deep(.el-button.is-plain:hover) {
+  border-color: var(--settings-action-border);
+  background: var(--settings-action-hover);
+  color: var(--settings-action-fg);
+}
+
+.settings-view :deep(.el-button--danger.is-plain) {
+  border-color: color-mix(in srgb, var(--settings-action-danger) 50%, transparent);
+  color: var(--settings-action-danger);
+}
+
+.settings-view :deep(.el-button--danger.is-plain:hover) {
+  border-color: var(--settings-action-danger);
+  background: var(--settings-action-danger);
+  color: #ffffff;
+}
+
+.settings-view :deep(.el-button--danger.is-plain:active) {
+  border-color: var(--settings-action-danger-active);
+  background: var(--settings-action-danger-active);
+}
+
+.settings-view :deep(.el-button.is-text) {
+  min-height: 28px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--settings-action-fg);
+}
+
+.settings-view :deep(.el-button.is-text:hover) {
+  border-color: transparent;
+  background: var(--settings-action-hover);
+  color: var(--settings-action-fg);
+}
+
+.settings-view :deep(.el-button--danger.is-text) {
+  color: var(--settings-action-danger);
+}
+
+.settings-view :deep(.el-button.is-disabled),
+.settings-view :deep(.el-button.is-disabled:hover) {
+  border-color: var(--settings-action-border);
+  background: var(--settings-action-bg);
+  color: var(--text-muted);
+  opacity: 0.55;
 }
 
 .test-result {
@@ -2461,6 +3526,141 @@ async function clearChatHistory() {
 }
 
 /* Sandbox external apps */
+.mxc-card {
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border));
+}
+.mxc-subtitle {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.mxc-state {
+  font-size: 12px;
+  font-weight: 700;
+}
+.mxc-state-ok {
+  color: #4caf50;
+}
+.mxc-state-blocked {
+  color: var(--settings-action-danger);
+}
+.mxc-state-neutral {
+  color: var(--text-muted);
+}
+.mxc-primary-detail {
+  padding: 0 24px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.mxc-technical-summary {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.mxc-technical-summary:hover {
+  background: var(--bg-hover);
+}
+.mxc-technical-summary:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -3px;
+}
+.mxc-technical-chevron {
+  color: var(--text-muted);
+  font-size: 18px;
+}
+.mxc-technical-details {
+  border-top: 1px solid var(--border);
+}
+.mxc-technical-details .row-value {
+  max-width: 65%;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.mxc-folder-policy {
+  gap: 8px;
+}
+.mxc-folder-policy-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.mxc-folder-policy-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.mxc-folder-policy-locked {
+  margin-top: 0;
+}
+.mxc-folder-policy .dir-item {
+  gap: 8px;
+}
+.mxc-folder-policy .dir-path {
+  flex: 1;
+}
+.mxc-folder-policy .tag-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.mxc-folder-policy-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mxc-durable-approval {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.mxc-durable-approval .el-button {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+.mxc-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+.mxc-alert {
+  margin-top: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.mxc-alert-warning {
+  border-color: rgba(230, 162, 60, 0.45);
+  background: rgba(230, 162, 60, 0.08);
+}
+.mxc-alert-error {
+  border-color: color-mix(in srgb, var(--settings-action-danger) 45%, transparent);
+  background: color-mix(in srgb, var(--settings-action-danger) 8%, transparent);
+}
 .external-apps-list {
   display: flex;
   flex-wrap: wrap;
@@ -2479,16 +3679,22 @@ async function clearChatHistory() {
   color: var(--text-secondary);
 }
 .app-tag .tag-remove {
-  background: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  background: transparent;
   border: none;
+  border-radius: 4px;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
-  padding: 0 2px;
+  padding: 0;
 }
 .app-tag .tag-remove:hover {
-  color: #ff3b30;
+  background: color-mix(in srgb, var(--settings-action-danger) 12%, transparent);
+  color: var(--settings-action-danger);
 }
 .app-tag-add {
   border-style: dashed;
@@ -2504,17 +3710,54 @@ async function clearChatHistory() {
   color: var(--text-primary);
 }
 .tag-add-btn {
-  background: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  background: transparent;
   border: none;
-  color: var(--accent);
+  border-radius: 4px;
+  color: var(--settings-action-fg);
   cursor: pointer;
   font-size: 16px;
-  font-weight: bold;
-  padding: 0 2px;
+  font-weight: 400;
+  padding: 0;
   line-height: 1;
 }
 .tag-add-btn:hover {
-  opacity: 0.7;
+  background: var(--settings-action-hover);
+}
+
+.dir-add-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--settings-action-border);
+  border-radius: 6px;
+  background: var(--settings-action-bg);
+  color: var(--settings-action-fg);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  transition:
+    background 0.1s,
+    border-color 0.1s,
+    color 0.1s;
+}
+
+.dir-add-btn:hover:not(:disabled) {
+  background: var(--settings-action-hover);
+}
+
+.dir-add-btn:active:not(:disabled) {
+  background: var(--settings-action-active);
+}
+
+.dir-add-btn:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 /* Sandbox directory permissions */
@@ -2638,7 +3881,7 @@ async function clearChatHistory() {
 /* ── Privacy Protection ── */
 .privacy-levels {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
 
@@ -2677,16 +3920,6 @@ async function clearChatHistory() {
   font-size: 13px;
   font-weight: 400;
   color: var(--text-primary);
-}
-
-.privacy-badge-recommended {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(212, 168, 67, 0.15);
-  color: var(--accent-selected);
-  margin-left: auto;
 }
 
 .privacy-card-list {

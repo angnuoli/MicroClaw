@@ -3,6 +3,7 @@
 # Runs the end-to-end packaging script (build.ps1) on every PR.
 # Verifies that the entire pipeline still produces:
 #   - AppContainerLauncher.exe (.NET 9)
+#   - bundled Windows Node host (.NET 10) + official MXC runtime
 #   - desktop\release\win-unpacked\ (electron-builder)
 #   - dist\microclaw-portable.zip
 #   - dist\MicroClawInstaller\ + dist\MicroClawInstaller.zip (PyInstaller)
@@ -42,25 +43,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # A supported Node.js toolchain is pre-installed on the self-hosted runner.
+      # Toolchain (Node 26.1+) is pre-installed on the self-hosted runner.
       # actions/setup-node is unreliable under the NetworkService account
       # (HKLM/tool-cache permission issues), so just verify the version.
       - name: Verify pre-installed Node.js
         run: |
           $ErrorActionPreference = 'Stop'
-          $node = (& node --version).TrimStart('v')
-          $parsed = [version]$node
-          $supported =
-            ($parsed.Major -eq 24 -and $parsed -ge [version]'24.16.0') -or
-            ($parsed.Major -ge 26 -and $parsed -ge [version]'26.1.0')
-          if (-not $supported) { throw "Node $node is unsupported by OpenClaw 2026.10.2" }
+          . .\scripts\windows\node-runtime.ps1
+          $node = & node --version
+          if ($LASTEXITCODE -ne 0 -or -not (Test-SupportedNodeVersion $node)) {
+            throw "Node $node is unsupported by OpenClaw 2026.10.2 (need >=24.16.0 <25 || >=26.1.0; install Node 26)"
+          }
           Write-Host "node $node"
 
       - name: Install dependencies (all packages)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($d in '.', 'desktop', 'desktop/renderer', 'desktop/studio-backend') {
+          foreach ($d in '.', 'desktop', 'desktop/renderer') {
             Write-Host "── npm ci in $d ──"
             Push-Location $d
             try {
@@ -133,24 +133,26 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      # Toolchain (supported Node.js, .NET 9 SDK, Python 3.12+) is pre-installed on
+      # Toolchain (Node 26.1+, .NET 9/10 SDKs, Python 3.12+) is pre-installed on
       # the self-hosted runner. We only verify versions here; installing
       # via actions/setup-* is unreliable under the NetworkService account
       # (HKLM/tool-cache permission issues).
       - name: Verify pre-installed toolchain
         run: |
           $ErrorActionPreference = 'Stop'
-          $node = (& node --version).TrimStart('v')
-          $parsed = [version]$node
-          $supported =
-            ($parsed.Major -eq 24 -and $parsed -ge [version]'24.16.0') -or
-            ($parsed.Major -ge 26 -and $parsed -ge [version]'26.1.0')
-          if (-not $supported) { throw "Node $node is unsupported by OpenClaw 2026.10.2" }
+          . .\scripts\windows\node-runtime.ps1
+          $node = & node --version
+          if ($LASTEXITCODE -ne 0 -or -not (Test-SupportedNodeVersion $node)) {
+            throw "Node $node is unsupported by OpenClaw 2026.10.2 (need >=24.16.0 <25 || >=26.1.0; install Node 26)"
+          }
           Write-Host "node $node"
-          $dotnet = & dotnet --version
-          if ([version]($dotnet -split '-')[0] -lt [version]'9.0') { throw "dotnet $dotnet < 9.0" }
-          Write-Host "dotnet $dotnet"
+          $sdks = & dotnet --list-sdks
+          if (-not ($sdks -match '^9\.')) { throw ".NET 9 SDK is required" }
+          if (-not ($sdks -match '^10\.')) { throw ".NET 10 SDK is required" }
+          Write-Host $sdks
 
       # Resolve a Python 3.12+ interpreter for the NetworkService account.
       - name: Setup Python 3.12+
@@ -166,6 +168,9 @@ jobs:
       - name: Run build.ps1
         run: .\build.ps1
 
+      - name: Build unsigned MSIX
+        run: npm run dist:msix --prefix desktop
+
       - name: Verify build artifacts
         run: |
           $expected = @(
@@ -174,8 +179,16 @@ jobs:
             'dist\MicroClawInstaller'
           )
           $missing = $expected | Where-Object { -not (Test-Path $_) }
+          if (-not (Get-ChildItem 'desktop\release\MicroClawDesktop-*-x64.msix')) {
+            $missing += 'desktop\release\MicroClawDesktop-<version>-x64.msix'
+          }
           if ($missing) {
             Write-Host "::error::Missing expected artifacts: $($missing -join ', ')"
             exit 1
           }
           Get-ChildItem dist | Format-Table Name, Length, LastWriteTime
+
+      - name: Validate MSIX contents
+        run: |
+          Get-ChildItem desktop\release\MicroClawDesktop-*-x64.msix |
+            ForEach-Object { .\scripts\windows\validate-msix.ps1 -Path $_.FullName }

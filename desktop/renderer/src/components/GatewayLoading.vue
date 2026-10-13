@@ -94,13 +94,20 @@
         </div>
 
         <!-- Error detail (shown when gateway reports an error) -->
-        <div v-if="isFailed && props.errorMessage" class="loading-error-detail">
-          {{ props.errorMessage }}
+        <div v-if="isFailed && displayError" class="loading-error-detail">
+          {{ displayError }}
         </div>
 
         <!-- Retry button (timeout / failed) -->
         <button v-if="isFailed" class="loading-retry" @click="$emit('retry')">
           {{ t("gateway.retry") }}
+        </button>
+        <button
+          v-if="isMxcFailure && props.mxcDesired"
+          class="loading-retry loading-disable-mxc"
+          @click="$emit('disable-mxc')"
+        >
+          {{ t("gateway.disableMxc") }}
         </button>
       </div>
     </div>
@@ -123,7 +130,7 @@ import imgGeologist from "@/assets/Geologist.png";
 import imgLawyer from "@/assets/Lawyer.png";
 import imgPainter from "@/assets/Painter.png";
 import imgScientist from "@/assets/Scientist.png";
-import imgSinger from "@/assets/Singer.png";
+import imgCreativeMuse from "@/assets/CreativeMuse.png";
 
 const IDENTITY_IMAGES = [
   imgArchaeologist,
@@ -134,7 +141,7 @@ const IDENTITY_IMAGES = [
   imgLawyer,
   imgPainter,
   imgScientist,
-  imgSinger,
+  imgCreativeMuse,
 ];
 
 const CAROUSEL_KEYS = [
@@ -148,10 +155,28 @@ const props = defineProps<{
   connected: boolean;
   warming: boolean;
   errorMessage?: string;
+  mxcDesired?: boolean;
+  mxcPhase?: string;
+  mxcDetail?: string | null;
 }>();
-defineEmits<{ retry: [] }>();
+defineEmits<{ retry: []; "disable-mxc": [] }>();
 
-const isFailed = computed(() => props.status === "timeout" || props.status === "failed");
+const isMxcFailure = computed(
+  () =>
+    props.mxcDesired === true &&
+    ["locked", "failed"].includes(props.mxcPhase ?? "") &&
+    Boolean(props.mxcDetail),
+);
+const isMxcTransition = computed(
+  () =>
+    props.mxcDesired === true &&
+    Boolean(props.mxcPhase) &&
+    !["active", "idle", "locked", "failed"].includes(props.mxcPhase ?? ""),
+);
+const isFailed = computed(
+  () => isMxcFailure.value || props.status === "timeout" || props.status === "failed",
+);
+const displayError = computed(() => props.mxcDetail || props.errorMessage);
 
 // ── Window controls ──
 
@@ -173,6 +198,20 @@ function closeWindow() {
 // ── Progress (preserved from original) ──
 
 const targetProgress = computed(() => {
+  if (isMxcTransition.value) {
+    const progress: Record<string, number> = {
+      locking: 20,
+      validating: 35,
+      persisting: 50,
+      "starting-locked": 72,
+      "smoking-locked": 80,
+      "starting-active": 86,
+      "smoking-active": 92,
+      "verifying-active": 97,
+      "starting-standard": 88,
+    };
+    return progress[props.mxcPhase ?? ""] ?? 65;
+  }
   if (props.warming) return 98;
   if (props.connected) return 100;
   if (isFailed.value) return displayProgress.value; // freeze
@@ -219,6 +258,10 @@ watch(
 );
 
 const statusText = computed(() => {
+  if (isMxcFailure.value) return t("gateway.mxcFailed");
+  if (isMxcTransition.value) {
+    return t(`settings.windowsNodeMxcLifecyclePhase.${props.mxcPhase}`);
+  }
   if (props.warming) return t("gateway.warming");
   if (props.connected) return t("gateway.ready");
   switch (props.status) {
@@ -380,25 +423,25 @@ watch(
 /* ── Window controls ── */
 .window-controls {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 0;
+  right: 0;
   display: flex;
-  gap: 2px;
+  gap: 0;
   -webkit-app-region: no-drag;
   z-index: 20;
 }
 
 .win-ctrl {
-  width: 32px;
+  width: 46px;
   height: 32px;
   display: grid;
   place-items: center;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  border-radius: 8px;
+  border-radius: 0;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.1s;
 }
 
 .win-ctrl:hover {
@@ -409,16 +452,24 @@ watch(
   background: var(--bg-tertiary);
 }
 
+.win-ctrl:active {
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
 .win-ctrl--close:hover {
-  background: var(--smtc-status-danger-background);
+  background: #c42b1c;
+}
+
+.win-ctrl--close:active {
+  background: #a4262c;
 }
 
 .win-ctrl--close:hover svg {
-  stroke: var(--smtc-status-danger-foreground);
+  stroke: #ffffff;
 }
 
 :global(html.dark) .win-ctrl--close:hover {
-  background: color-mix(in srgb, var(--smtc-status-danger-background) 28%, transparent);
+  background: #c42b1c;
 }
 
 .loading-center {

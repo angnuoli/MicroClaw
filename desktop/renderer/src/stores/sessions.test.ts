@@ -118,6 +118,19 @@ describe("useSessionStore", () => {
     expect(store.sessions[0].key).toBe("test-2");
   });
 
+  it("toggles and persists a pinned session", () => {
+    const store = useSessionStore();
+    store.ensureSession("test-1");
+
+    store.togglePinned("test-1");
+
+    expect(store.sessions[0].pinned).toBe(true);
+    expect(JSON.parse(storage["openclaw-sessions"])[0].pinned).toBe(true);
+
+    store.togglePinned("test-1");
+    expect(store.sessions[0].pinned).toBe(false);
+  });
+
   it("canonicalizeSession replaces a local alias", () => {
     const store = useSessionStore();
     store.ensureSession("main");
@@ -175,6 +188,21 @@ describe("useSessionStore", () => {
     expect(store.sessions[0].title).toBe("Custom Title");
   });
 
+  it("uses the Gateway title for display and falls back to the local title", () => {
+    const store = useSessionStore();
+    store.ensureSession("test-1");
+    store.updateSession("test-1", { title: "Local title" });
+    const session = store.sessions[0];
+
+    expect(store.getDisplayTitle(session)).toBe("Local title");
+
+    store.setGatewayTitles({ "test-1": "Gateway title" });
+    expect(store.getDisplayTitle(session)).toBe("Gateway title");
+
+    store.setGatewayTitles({});
+    expect(store.getDisplayTitle(session)).toBe("Local title");
+  });
+
   it("sortedSessions returns sessions sorted by updatedAt descending", () => {
     const store = useSessionStore();
     store.ensureSession("old");
@@ -206,6 +234,94 @@ describe("useSessionStore", () => {
     const store = useSessionStore();
     expect(store.sessions).toHaveLength(1);
     expect(store.sessions[0].key).toBe("loaded");
+  });
+
+  it("keeps historical Singer sessions visible under Creative Muse", () => {
+    storage["openclaw-sessions"] = JSON.stringify([
+      {
+        key: "agent:singer:legacy",
+        title: "Legacy draft",
+        createdAt: 1,
+        updatedAt: 1,
+        preview: "lyrics",
+        agentId: "singer",
+      },
+    ]);
+    setActivePinia(createPinia());
+
+    const store = useSessionStore();
+
+    expect(store.sessions[0]).toMatchObject({
+      key: "agent:singer:legacy",
+      agentId: "creative-muse",
+      title: "Legacy draft",
+    });
+  });
+
+  it("keeps historical Master sessions visible under Dr. Pulse", () => {
+    storage["openclaw-sessions"] = JSON.stringify([
+      {
+        key: "agent:master:legacy",
+        title: "Legacy system check",
+        createdAt: 1,
+        updatedAt: 1,
+        preview: "diagnose",
+        agentId: "master",
+      },
+    ]);
+    setActivePinia(createPinia());
+
+    const store = useSessionStore();
+
+    expect(store.sessions[0]).toMatchObject({
+      key: "agent:master:legacy",
+      agentId: "dr-pulse",
+      title: "Legacy system check",
+    });
+  });
+
+  it("keeps historical Leopard sessions visible under Market Sentinel", () => {
+    storage["openclaw-sessions"] = JSON.stringify([
+      {
+        key: "agent:leopard:legacy",
+        title: "Legacy market review",
+        createdAt: 1,
+        updatedAt: 1,
+        preview: "market",
+        agentId: "leopard",
+      },
+    ]);
+    setActivePinia(createPinia());
+
+    const store = useSessionStore();
+
+    expect(store.sessions[0]).toMatchObject({
+      key: "agent:leopard:legacy",
+      agentId: "market-sentinel",
+      title: "Legacy market review",
+    });
+  });
+
+  it("keeps historical Painter sessions visible under Office Artisan", () => {
+    storage["openclaw-sessions"] = JSON.stringify([
+      {
+        key: "agent:painter:legacy",
+        title: "Legacy design session",
+        createdAt: 1,
+        updatedAt: 1,
+        preview: "slides",
+        agentId: "painter",
+      },
+    ]);
+    setActivePinia(createPinia());
+
+    const store = useSessionStore();
+
+    expect(store.sessions[0]).toMatchObject({
+      key: "agent:painter:legacy",
+      agentId: "office-artisan",
+      title: "Legacy design session",
+    });
   });
 
   it("removes a persisted reserved warm-up session on load", () => {

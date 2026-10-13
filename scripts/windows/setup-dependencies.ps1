@@ -5,7 +5,7 @@
 .DESCRIPTION
     此脚本安装 MicroClaw 桌面客户端所需的核心第三方依赖：
       1. Git for Windows (PortableGit)
-      2. Node.js v24.16+ (24.x) or v26.1+ (from npmmirror)
+      2. Node.js v26.1+ (from npmmirror; also supports v24.16.x and later v24.x)
       3. npm 镜像源配置
       4. OpenClaw Gateway (npm install -g)
       5. V8 编译缓存预热
@@ -70,17 +70,7 @@ function Write-Warn  { param([string]$msg) Write-Host "  [WARN] $msg" -Foregroun
 function Write-Info  { param([string]$msg) Write-Host "  $msg" -ForegroundColor Gray }
 function Write-Err   { param([string]$msg) Write-Host "  [ERROR] $msg" -ForegroundColor Red }
 
-function Test-SupportedNodeVersion {
-    param([string]$Version)
-    try {
-        $parsed = [version]$Version.TrimStart("v")
-    } catch {
-        return $false
-    }
-    if ($parsed.Major -eq 24) { return $parsed -ge [version]"24.16.0" }
-    if ($parsed.Major -ge 26) { return $parsed -ge [version]"26.1.0" }
-    return $false
-}
+. "$PSScriptRoot\node-runtime.ps1"
 
 # ── Helpers ──
 function Get-Arch {
@@ -243,7 +233,7 @@ if (Test-Path $nodeExe) {
         if (Test-SupportedNodeVersion $ver) {
             $needInstall = $false
         } else {
-            Write-Warn "Node.js $ver is unsupported by OpenClaw $OpenClawTag; upgrading"
+            Write-Warn "Node.js $ver is unsupported by OpenClaw $OpenClawTag (need >=24.16.0 <25 || >=26.1.0); upgrading to Node 26"
         }
     }
 }
@@ -252,13 +242,13 @@ if ($needInstall) {
     Write-Step "Installing Node.js ($Mirror)..."
     $arch = Get-Arch
 
-    # Resolve latest supported Node.js 24.x version
-    $nodeVersion = "24.16.0"
+    # Resolve the latest supported Node.js 26.x version.
+    $nodeVersion = "26.1.0"
     try {
         $versionIndex = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" -TimeoutSec 15 -UseBasicParsing
         foreach ($entry in $versionIndex) {
             $v = $entry.version -replace '^v',''
-            if ($v -match '^24\.' -and (Test-SupportedNodeVersion $v)) {
+            if ($v -match '^26\.' -and (Test-SupportedNodeVersion $v)) {
                 $nodeVersion = $v
                 break
             }
@@ -321,6 +311,9 @@ if ($needInstall) {
         }
 
         $ver = & (Join-Path $NodeDir "node.exe") --version 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-SupportedNodeVersion $ver)) {
+            throw "Installed Node.js $ver is unsupported (need >=24.16.0 <25 || >=26.1.0)"
+        }
         Write-Ok "Node.js $ver installed to $NodeDir"
     } catch {
         Write-Err "Node.js install failed: $_"

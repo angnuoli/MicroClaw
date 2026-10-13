@@ -1,12 +1,19 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ChatAttachment, PrepareChatAttachmentsResult } from "./chat-attachments";
+import type {
+  ChatAttachment,
+  ClipboardImageInput,
+  PrepareChatAttachmentsResult,
+} from "./chat-attachments";
 import type { OpenAttachmentRequest } from "./attachment-open";
+import type { LocalModelAPI, LocalModelOperation } from "./local-model-types";
+import type { SessionModelAPI } from "./session-model-types";
 
 contextBridge.exposeInMainWorld("openclaw", {
   // --- Gateway lifecycle ---
   gateway: {
     getPort: () => ipcRenderer.invoke("gateway:get-port"),
     getStatus: () => ipcRenderer.invoke("gateway:get-status"),
+    isServiceReady: () => ipcRenderer.invoke("gateway:is-service-ready"),
     restart: (options?: { hard?: boolean }) => ipcRenderer.invoke("gateway:restart", options),
     warmUpAgent: () => ipcRenderer.invoke("gateway:warm-up-agent"),
     onStatus: (callback: (status: string) => void) => {
@@ -29,6 +36,11 @@ contextBridge.exposeInMainWorld("openclaw", {
       ipcRenderer.on("gateway:ws-disconnected", handler);
       return () => ipcRenderer.removeListener("gateway:ws-disconnected", handler);
     },
+    onServiceReady: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on("gateway:service-ready", handler);
+      return () => ipcRenderer.removeListener("gateway:service-ready", handler);
+    },
   },
 
   // --- Configuration ---
@@ -38,7 +50,8 @@ contextBridge.exposeInMainWorld("openclaw", {
     needsSetup: () => ipcRenderer.invoke("config:needs-setup"),
     read: () => ipcRenderer.invoke("config:read"),
     readEnv: () => ipcRenderer.invoke("config:read-env"),
-    write: (config: any) => ipcRenderer.invoke("config:write", config),
+    write: (config: any, expectedConfig?: unknown) =>
+      ipcRenderer.invoke("config:write", config, expectedConfig),
   },
 
   // --- Settings ---
@@ -107,6 +120,13 @@ contextBridge.exposeInMainWorld("openclaw", {
 
     /** Load chat history for a session. */
     loadHistory: (sessionKey: string) => ipcRenderer.invoke("chat:load-history", { sessionKey }),
+
+    /** Load titles derived by OpenClaw from session transcripts. */
+    listSessionTitles: (keys: string[]) => ipcRenderer.invoke("chat:list-session-titles", { keys }),
+
+    /** Generate a summary title and persist it on the Gateway session. */
+    generateSessionTitle: (sessionKey: string) =>
+      ipcRenderer.invoke("chat:generate-session-title", { sessionKey }),
 
     /** Abort the current run on a session. */
     abort: (sessionKey: string) => ipcRenderer.invoke("chat:abort", { sessionKey }),
@@ -216,6 +236,38 @@ contextBridge.exposeInMainWorld("openclaw", {
 
   // --- Model testing ---
   model: {
+    selectDefault: (params: import("./default-model-selection").DefaultModelSelection) =>
+      ipcRenderer.invoke("model:select-default", params),
+    session: {
+      get: (sessionKey) => ipcRenderer.invoke("model:session:get", sessionKey),
+      select: (params) => ipcRenderer.invoke("model:session:select", params),
+      getRecovery: () => ipcRenderer.invoke("model:session:get-recovery"),
+      recover: (params) => ipcRenderer.invoke("model:session:recover", params),
+      onRecoveryChanged: (callback) => {
+        const listener = () => callback();
+        ipcRenderer.on("model:session:recovery-changed", listener);
+        return () => ipcRenderer.removeListener("model:session:recovery-changed", listener);
+      },
+    } satisfies SessionModelAPI,
+    local: {
+      getSnapshot: () => ipcRenderer.invoke("model:local:get-snapshot"),
+      getCapabilities: () => ipcRenderer.invoke("model:local:get-capabilities"),
+      detect: (options) => ipcRenderer.invoke("model:local:detect", options),
+      inspectProvider: () => ipcRenderer.invoke("model:local:inspect-provider"),
+      installProvider: (params) => ipcRenderer.invoke("model:local:install-provider", params),
+      prepare: (params) => ipcRenderer.invoke("model:local:prepare", params),
+      activate: (params) => ipcRenderer.invoke("model:local:activate", params),
+      answer: (params) => ipcRenderer.invoke("model:local:answer", params),
+      cancel: (operationId) => ipcRenderer.invoke("model:local:cancel", operationId),
+      getOperation: () => ipcRenderer.invoke("model:local:get-operation"),
+      resume: () => ipcRenderer.invoke("model:local:resume"),
+      onEvent: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, operation: LocalModelOperation) =>
+          callback(operation);
+        ipcRenderer.on("model:local:event", listener);
+        return () => ipcRenderer.removeListener("model:local:event", listener);
+      },
+    } satisfies LocalModelAPI,
     testConnection: (params: {
       baseUrl: string;
       apiKey: string;
@@ -245,19 +297,6 @@ contextBridge.exposeInMainWorld("openclaw", {
     getExchangeRate: () => ipcRenderer.invoke("usage:get-exchange-rate"),
   },
 
-  // --- Studio Backend ---
-  studio: {
-    start: () => ipcRenderer.invoke("studio:start"),
-    stop: () => ipcRenderer.invoke("studio:stop"),
-    getStatus: () => ipcRenderer.invoke("studio:get-status"),
-    getPort: () => ipcRenderer.invoke("studio:get-port"),
-    onStatus: (callback: (status: string) => void) => {
-      const handler = (_event: any, status: string) => callback(status);
-      ipcRenderer.on("studio:status", handler);
-      return () => ipcRenderer.removeListener("studio:status", handler);
-    },
-  },
-
   // --- Window ---
   window: {
     minimize: () => ipcRenderer.invoke("window:minimize"),
@@ -284,6 +323,11 @@ contextBridge.exposeInMainWorld("openclaw", {
         ok: boolean;
         error?: string;
       }>,
+    importClipboardImages: (images: ClipboardImageInput[], currentTotalBytes = 0) =>
+      ipcRenderer.invoke("attachment:import-clipboard-images", {
+        images,
+        currentTotalBytes,
+      }) as Promise<PrepareChatAttachmentsResult>,
   },
 
   // --- Native dialogs ---
@@ -292,6 +336,44 @@ contextBridge.exposeInMainWorld("openclaw", {
       ipcRenderer.invoke("dialog:open-files", {
         currentTotalBytes,
       }) as Promise<PrepareChatAttachmentsResult>,
+  },
+
+  logs: {
+    exportGateway: (lines: string[]) =>
+      ipcRenderer.invoke("logs:export-gateway", lines) as Promise<{
+        canceled: boolean;
+        filePath?: string;
+      }>,
+  },
+
+  windowsNodeMxc: {
+    getStatus: () => ipcRenderer.invoke("windows-node-mxc:get-status"),
+    setEnabled: (params: { enabled: boolean; nodeId?: string }) =>
+      ipcRenderer.invoke("windows-node-mxc:set-enabled", params),
+    validateFolderPolicy: (draft: { rw: string[]; ro: string[] }) =>
+      ipcRenderer.invoke("windows-node-mxc:validate-folder-policy", draft),
+    applyFolderPolicy: (draft: { rw: string[]; ro: string[] }) =>
+      ipcRenderer.invoke("windows-node-mxc:apply-folder-policy", draft),
+    listDurableApprovals: () => ipcRenderer.invoke("windows-node-mxc:durable-approvals:list"),
+    revokeDurableApproval: (id: string) =>
+      ipcRenderer.invoke("windows-node-mxc:durable-approvals:revoke", id),
+    revokeAllDurableApprovals: () =>
+      ipcRenderer.invoke("windows-node-mxc:durable-approvals:revoke-all"),
+    getPendingApproval: () => ipcRenderer.invoke("windows-node-mxc:approval-current"),
+    respondApproval: (params: {
+      requestId: string;
+      decision: "deny" | "allow-once" | "allow-always";
+    }) => ipcRenderer.invoke("windows-node-mxc:approval-respond", params),
+    onApprovalRequest: (callback: (request: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, request: unknown) => callback(request);
+      ipcRenderer.on("windows-node-mxc:approval-request", handler);
+      return () => ipcRenderer.removeListener("windows-node-mxc:approval-request", handler);
+    },
+    onLifecycleState: (callback: (state: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
+      ipcRenderer.on("windows-node-mxc:lifecycle-state", handler);
+      return () => ipcRenderer.removeListener("windows-node-mxc:lifecycle-state", handler);
+    },
   },
 
   // --- Tool Sandbox ---
@@ -319,9 +401,19 @@ contextBridge.exposeInMainWorld("openclaw", {
       }>,
     getUserDirs: () =>
       ipcRenderer.invoke("sandbox:get-user-dirs") as Promise<{ rw: string[]; ro: string[] }>,
-    addUserDir: (params: { access: "rw" | "ro" }) =>
+    addUserDir: (params: { access: "rw" | "ro"; policy?: "windows-node-mxc" }) =>
       ipcRenderer.invoke("sandbox:add-user-dir", params) as Promise<{
         ok: boolean;
+        reason?: string;
+        parentDir?: string;
+        parentAccess?: string;
+        removedChildren?: string[];
+        dirs: { rw: string[]; ro: string[] };
+      }>,
+    stageUserDir: (params: { access: "rw" | "ro"; draft: { rw: string[]; ro: string[] } }) =>
+      ipcRenderer.invoke("sandbox:stage-user-dir", params) as Promise<{
+        ok: boolean;
+        canceled?: boolean;
         reason?: string;
         parentDir?: string;
         parentAccess?: string;
@@ -331,6 +423,15 @@ contextBridge.exposeInMainWorld("openclaw", {
     removeUserDir: (params: { dir: string; access: "rw" | "ro" }) =>
       ipcRenderer.invoke("sandbox:remove-user-dir", params) as Promise<{
         ok: boolean;
+        dirs: { rw: string[]; ro: string[] };
+      }>,
+    setUserDirAccess: (params: { dir: string; access: "rw" | "ro" }) =>
+      ipcRenderer.invoke("sandbox:set-user-dir-access", params) as Promise<{
+        ok: boolean;
+        reason?: string;
+        parentDir?: string;
+        parentAccess?: string;
+        removedChildren?: string[];
         dirs: { rw: string[]; ro: string[] };
       }>,
     onPermissionRequest: (

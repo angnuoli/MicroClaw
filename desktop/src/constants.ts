@@ -49,8 +49,10 @@ export const HEALTH_CHECK_FAILURE_THRESHOLD = 3;
  *  even though the gateway process is alive and making progress. */
 export const HEALTH_CHECK_BUSY_GRACE_MS = 240_000;
 
-/** Max time to wait for the gateway to become ready after spawn (ms). */
-export const GATEWAY_READY_TIMEOUT_MS = 120_000;
+/** Max time to wait for the gateway to become ready after spawn (ms).
+ *  The pinned compatibility preload can make a cold Windows start take more
+ *  than two minutes before the Gateway binds its health endpoint. */
+export const GATEWAY_READY_TIMEOUT_MS = 300_000;
 
 /** Max time to wait for the gateway port to become free (ms). */
 export const PORT_WAIT_TIMEOUT_MS = 30_000;
@@ -58,8 +60,8 @@ export const PORT_WAIT_TIMEOUT_MS = 30_000;
 /** Max time to wait for a model provider connection test (ms). */
 export const MODEL_CONNECTION_TEST_TIMEOUT_MS = 15_000;
 
-/** Delay before the post-spawn restart that activates plugin channels (ms). */
-export const POST_SPAWN_RESTART_DELAY_MS = 5_000;
+/** Max wait for plugin channels before a compatibility restart (ms). */
+export const POST_SPAWN_CHANNEL_READY_TIMEOUT_MS = 5_000;
 
 /** Timeout for sandbox permission requests — file, shell, and app approval (ms).
  *  Shared by sandbox-preload.js (via env var) and main.ts (remote approval).
@@ -94,7 +96,7 @@ export const EXCHANGE_RATE_CACHE_TTL_MS = 12 * 60 * 60 * 1_000;
 export const USD_TO_CNY_FALLBACK_RATE = 7.2;
 
 /** Public manifest used by the P0 manual update checker. */
-export const UPDATE_MANIFEST_URL = "https://microclaw.microsoftol.com/releases/latest.json";
+export const UPDATE_MANIFEST_URL = "https://microclaw.microsoft.com/releases/latest.json";
 
 // ── WebSocket reconnect back-off ────────────────────────────────────────
 
@@ -109,6 +111,8 @@ export const WS_RECONNECT_MULTIPLIER = 1.7;
 
 /** Per-request timeout for gateway WS RPC calls (ms). */
 export const WS_REQUEST_TIMEOUT_MS = 30_000;
+
+export const MODEL_APPLY_SETTLE_TIMEOUT_MS = 30_000;
 
 /** Reserved throwaway session used to pre-warm the main agent. */
 export const AGENT_WARMUP_SESSION_KEY = "agent:main:__microclaw_warmup__";
@@ -126,36 +130,6 @@ export const CHAT_ATTACHMENT_MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 /** Maximum decoded size of all attachments selected for one message (50 MiB). */
 export const CHAT_ATTACHMENT_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
-
-// ── Studio backend ──────────────────────────────────────────────────────
-
-/** Default port for the Studio Node backend. */
-export const STUDIO_DEFAULT_PORT = 19000;
-
-/** Max time to wait for the studio backend to become ready after spawn (ms). */
-export const STUDIO_READY_TIMEOUT_MS = 30_000;
-
-/** Health-check poll interval while waiting for studio backend ready (ms). */
-export const STUDIO_HEALTH_POLL_MS = 500;
-
-/** HTTP timeout for a single studio health-check request (ms). */
-export const STUDIO_HEALTH_HTTP_TIMEOUT_MS = 2_000;
-
-/** Max automatic restart attempts for the studio backend. */
-export const STUDIO_MAX_RESTARTS = 3;
-
-/** Sub-directory under the state dir for studio data files. */
-export const STUDIO_DATA_SUBDIR = "studio-data";
-
-// ── Studio backend status ───────────────────────────────────────────────
-
-export type StudioBackendStatus =
-  | "stopped"
-  | "starting"
-  | "running"
-  | "restarting"
-  | "failed"
-  | "stopping";
 
 // ── Gateway status ──────────────────────────────────────────────────────
 

@@ -6,7 +6,9 @@ const mockLoadHistory = vi.fn().mockResolvedValue({ messages: [] });
 const mockSendMessage = vi.fn().mockResolvedValue(undefined);
 const mockAbort = vi.fn().mockResolvedValue(undefined);
 const mockDeleteSession = vi.fn().mockResolvedValue(undefined);
+const mockGenerateSessionTitle = vi.fn().mockResolvedValue("Summary title");
 const mockIsConnected = vi.fn().mockResolvedValue(false);
+const mockGetSettings = vi.fn().mockResolvedValue({});
 
 Object.defineProperty(globalThis, "window", {
   value: {
@@ -17,6 +19,7 @@ Object.defineProperty(globalThis, "window", {
         sendMessage: mockSendMessage,
         abort: mockAbort,
         deleteSession: mockDeleteSession,
+        generateSessionTitle: mockGenerateSessionTitle,
         isConnected: mockIsConnected,
         onEvent: vi.fn(),
         onToolEvent: vi.fn(),
@@ -32,7 +35,7 @@ Object.defineProperty(globalThis, "window", {
         onWsDisconnected: vi.fn(),
         restart: vi.fn(),
       },
-      settings: { get: vi.fn().mockResolvedValue({}) },
+      settings: { get: mockGetSettings },
       sandbox: { onPermissionRequest: vi.fn() },
       skills: { pendingIntegrityResult: vi.fn().mockResolvedValue(null) },
       cron: { list: vi.fn().mockResolvedValue({ jobs: [] }) },
@@ -309,12 +312,13 @@ describe("useChatStore — stale stream recovery", () => {
     expect(store.lastStreamEventAt).toBeLessThanOrEqual(Date.now());
   });
 
-  it("handleChatEvent clears lastStreamEventAt on final", () => {
+  it("handleChatEvent clears stream state and generates a summary title on final", async () => {
     const store = useChatStore();
     store.streaming = true;
     store.sessionKey = "main";
     store.resolvedSessionKey = "agent:main:main";
     (store as any).lastStreamEventAt = Date.now();
+    const initialTitleRefreshRevision = store.sessionTitleRefreshRevision;
 
     store.handleChatEvent({
       runId: "r1",
@@ -325,6 +329,11 @@ describe("useChatStore — stale stream recovery", () => {
 
     expect(store.streaming).toBe(false);
     expect(store.lastStreamEventAt).toBeNull();
+    expect(store.sessionTitleRefreshRevision).toBe(initialTitleRefreshRevision + 1);
+    expect(mockGenerateSessionTitle).toHaveBeenCalledWith("agent:main:main");
+    await vi.waitFor(() => {
+      expect(store.sessionTitleRefreshRevision).toBe(initialTitleRefreshRevision + 2);
+    });
   });
 
   it("handleChatEvent clears lastStreamEventAt on aborted", () => {
@@ -399,6 +408,119 @@ describe("useChatStore — recoverAfterReconnect", () => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
     mockLoadHistory.mockResolvedValue({ messages: [] });
+  });
+
+  describe("slow model response notices", () => {
+    beforeEach(() => {
+      Object.keys(storage).forEach((key) => delete storage[key]);
+      setActivePinia(createPinia());
+      mockLoadHistory.mockClear().mockResolvedValue({ messages: [] });
+    });
+
+    function waitingStore(age = 100_000) {
+      const store = useChatStore();
+      store.sessionKey = "main";
+      store.resolvedSessionKey = "agent:main:main";
+      store.wsConnected = true;
+      store.streaming = true;
+      store.streamStartedAt = Date.now() - age;
+      store.lastStreamEventAt = store.streamStartedAt + 1;
+      store.messages = [{ role: "user", content: "Hello" }];
+      return store;
+    }
+
+    it("keeps a connected slow request alive and does not call it a network failure", () => {
+      const store = waitingStore();
+      store.checkStaleStream();
+      expect(store.streaming).toBe(true);
+      expect(store.lastError).toEqual({ code: "response_delayed", source: "watchdog" });
+      store.lastError = null;
+      store.checkStaleStream();
+      expect(store.lastError).toBeNull();
+      expect(mockLoadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps recovery bounded even when a connected model never replies", () => {
+      const store = waitingStore(610_000);
+      store.checkStaleStream();
+      expect(store.streaming).toBe(false);
+      expect(store.lastError?.code).toBe("response_delayed");
+    });
+
+    it("clears only the inferred notice when the actual reply arrives late", () => {
+      const store = waitingStore();
+      store.checkStaleStream();
+      store.handleChatEvent({
+        sessionKey: "agent:main:main",
+        runId: "slow",
+        state: "final",
+        message: { role: "assistant", content: "Hello!" },
+      });
+      expect(store.lastError).toBeNull();
+      expect(store.messages.at(-1)?.content).toBe("Hello!");
+    });
+
+    it("removes the legacy synthetic network banner when history confirms a reply", async () => {
+      const store = useChatStore();
+      store.lastError = { code: "network" };
+      mockLoadHistory.mockResolvedValue({
+        messages: [
+          { role: "user", content: "Hello" },
+          { role: "assistant", content: "Hello!" },
+        ],
+      });
+      await store.loadHistory();
+      expect(store.lastError).toBeNull();
+    });
+
+    it("does not hide a real provider error just because an older reply is present", async () => {
+      const store = useChatStore();
+      store.lastError = classifyChatError("ECONNREFUSED at model endpoint");
+      mockLoadHistory.mockResolvedValue({
+        messages: [
+          { role: "user", content: "Hello" },
+          { role: "assistant", content: "Earlier reply" },
+        ],
+      });
+      await store.loadHistory();
+      expect(store.lastError?.raw).toContain("ECONNREFUSED");
+    });
+
+    it("does not clear waiting state for an unanswered user message or tool-only history", async () => {
+      const store = waitingStore();
+      store.lastError = { code: "response_delayed", source: "watchdog" };
+      mockLoadHistory.mockResolvedValue({
+        messages: [
+          { role: "user", content: "Hello" },
+          { role: "assistant", content: [{ type: "toolCall", id: "t", name: "read" }] },
+        ],
+      });
+      await store.recoverAfterReconnect();
+      expect(store.streaming).toBe(true);
+      expect(store.lastError?.code).toBe("response_delayed");
+    });
+
+    it("does not end a different session when a recovery request returns late", async () => {
+      const store = waitingStore();
+      let complete!: (value: { messages: Array<{ role: string; content: string }> }) => void;
+      mockLoadHistory.mockReturnValueOnce(
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+      );
+      const pending = store.recoverAfterReconnect();
+      store.sessionKey = "other";
+      store.resolvedSessionKey = "agent:main:other";
+      store.streamStartedAt = Date.now();
+      complete({
+        messages: [
+          { role: "user", content: "Hello" },
+          { role: "assistant", content: "Old reply" },
+        ],
+      });
+      await pending;
+      expect(store.streaming).toBe(true);
+    });
   });
 
   it("is a no-op when not streaming", async () => {
@@ -557,10 +679,10 @@ describe("useChatStore — draft sessions", () => {
     const store = useChatStore();
     store.messages = [{ role: "user", content: "existing" }];
 
-    store.newSession();
+    store.newSession("main");
 
     const persisted = JSON.parse(storage["openclaw-sessions"] ?? "[]");
-    expect(store.sessionKey).toMatch(/^session-/);
+    expect(store.sessionKey).toMatch(/^agent:main:session-/);
     expect(store.messages).toEqual([]);
     expect(persisted.some((s: { key: string }) => s.key === store.sessionKey)).toBe(false);
   });
@@ -588,11 +710,41 @@ describe("useChatStore — draft sessions", () => {
     expect(store.currentSessionAgentId).toBe("coder");
   });
 
-  it("keeps a bare session key for the default (main) agent", () => {
+  it("identifies the main agent before a draft has messages or Gateway events", () => {
     const store = useChatStore();
     store.newSession("main");
-    expect(store.sessionKey).toMatch(/^session-/);
+    expect(store.sessionKey).toMatch(/^agent:main:session-/);
     expect(store.currentSessionAgentId).toBe("main");
+    expect(store.messages).toEqual([]);
+    expect(store.resolvedSessionKey).toBeNull();
+  });
+
+  it("attributes historical Singer session keys to Creative Muse", () => {
+    const store = useChatStore();
+    store.newSession("singer");
+    expect(store.sessionKey).toMatch(/^agent:singer:session-/);
+    expect(store.currentSessionAgentId).toBe("creative-muse");
+  });
+
+  it("attributes historical Master session keys to Dr. Pulse", () => {
+    const store = useChatStore();
+    store.newSession("master");
+    expect(store.sessionKey).toMatch(/^agent:master:session-/);
+    expect(store.currentSessionAgentId).toBe("dr-pulse");
+  });
+
+  it("attributes historical Leopard session keys to Market Sentinel", () => {
+    const store = useChatStore();
+    store.newSession("leopard");
+    expect(store.sessionKey).toMatch(/^agent:leopard:session-/);
+    expect(store.currentSessionAgentId).toBe("market-sentinel");
+  });
+
+  it("attributes historical Painter session keys to Office Artisan", () => {
+    const store = useChatStore();
+    store.newSession("painter");
+    expect(store.sessionKey).toMatch(/^agent:painter:session-/);
+    expect(store.currentSessionAgentId).toBe("office-artisan");
   });
 });
 
@@ -915,6 +1067,66 @@ describe("useChatStore — attachments", () => {
     expect(store.messages).toHaveLength(2);
     expect(store.getMessageAttachments(store.messages[0])[0].fileName).toBe("old.txt");
     expect(store.getMessageAttachments(store.messages[1])[0].fileName).toBe("pixel.png");
+  });
+});
+
+describe("useChatStore — privacy", () => {
+  beforeEach(() => {
+    Object.keys(storage).forEach((k) => delete storage[k]);
+    setActivePinia(createPinia());
+    mockSendMessage.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("sends PII unchanged when privacy defaults to basic", async () => {
+    const store = useChatStore();
+
+    await store.sendMessage("phone 13812345678");
+
+    expect(mockSendMessage).toHaveBeenCalledWith("main", "phone 13812345678", undefined);
+  });
+
+  it("redacts PII before sending in strict mode", async () => {
+    mockGetSettings.mockResolvedValueOnce({ privacyLevel: "strict" });
+    const store = useChatStore();
+
+    await store.sendMessage("phone 13812345678");
+
+    expect(mockSendMessage).toHaveBeenCalledWith("main", "phone 138****5678", undefined);
+  });
+
+  it("honors disabled Strict categories while redacting enabled ones", async () => {
+    mockGetSettings.mockResolvedValueOnce({
+      privacyLevel: "strict",
+      privacyControls: {
+        phone: false,
+        idCard: true,
+        bankCard: true,
+        email: true,
+        apiKey: true,
+      },
+    });
+    const store = useChatStore();
+
+    await store.sendMessage("phone 13812345678 email alice@example.com");
+
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "main",
+      "phone 13812345678 email al***@example.com",
+      undefined,
+    );
+  });
+
+  it("defaults missing legacy Strict controls to enabled", async () => {
+    mockGetSettings.mockResolvedValueOnce({ privacyLevel: "strict", privacyControls: {} });
+    const store = useChatStore();
+
+    await store.sendMessage("phone 13812345678 email alice@example.com");
+
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "main",
+      "phone 138****5678 email al***@example.com",
+      undefined,
+    );
   });
 });
 
@@ -1261,6 +1473,12 @@ function readVueTemplate(relativePath: string): string {
 }
 
 describe("template structure guards", () => {
+  it("ChatView wires clipboard paste through the image attachment handler", () => {
+    const content = readVueTemplate("views/ChatView.vue");
+    expect(content).toContain('@paste="handlePaste"');
+    expect(content).toContain("window.openclaw.attachment.importClipboardImages");
+  });
+
   // Guard against the thinking panel v-else-if regression:
   // hasThinking must NOT appear in a v-else-if directive, because that makes
   // the thinking panel mutually exclusive with the text content rendering.

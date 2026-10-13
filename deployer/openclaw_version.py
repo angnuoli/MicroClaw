@@ -5,11 +5,13 @@ from __future__ import annotations
 import re
 
 OPENCLAW_TARGET_VERSION = "2026.10.2"
-NODE_DEFAULT_MAJOR = "24"
-NODE_FALLBACK_VERSION = "24.16.0"
+NODE_DEFAULT_MAJOR = "26"
 NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0"
+NODE_FALLBACK_VERSION = "26.1.0"
 
-_NODE_VERSION_RE = re.compile(r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
+_NODE_VERSION_RE = re.compile(
+    r"v?(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
+)
 _OPENCLAW_VERSION_RE = re.compile(r"openclaw@(?P<version>\S+)")
 
 
