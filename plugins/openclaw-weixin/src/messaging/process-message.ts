@@ -32,8 +32,20 @@ import { StreamingMarkdownFilter } from "./markdown-filter.js";
 import { sendMessageWeixin } from "./send.js";
 import { WeixinReplyProgressSender } from "./reply-progress-sender.js";
 import { handleSlashCommand } from "./slash-commands.js";
+import {
+  assertMxcWeixinIngressReleased,
+  assertMxcWeixinOutboundMediaSource,
+  authorizeMxcWeixinOutboundMedia,
+  hasMxcWeixinMediaPolicy,
+  resolveWeixinLocalMediaPath,
+  resolveWeixinOutboundTempRoot,
+  stageMxcWeixinInboundMedia,
+} from "../security/mxc-policy.js";
 
-const MEDIA_OUTBOUND_TEMP_DIR = path.join(resolvePreferredOpenClawTmpDir(), "weixin/media/outbound-temp");
+const LEGACY_MEDIA_OUTBOUND_TEMP_DIR = path.join(
+  resolvePreferredOpenClawTmpDir(),
+  "weixin/media/outbound-temp",
+);
 
 /** Dependencies for processOneMessage, injected by the monitor loop. */
 export type ProcessMessageDeps = {
@@ -67,6 +79,7 @@ export async function processOneMessage(
   full: WeixinMessage,
   deps: ProcessMessageDeps,
 ): Promise<void> {
+  assertMxcWeixinIngressReleased();
   if (!deps?.channelRuntime) {
     logger.error(
       `processOneMessage: channelRuntime is undefined, skipping message from=${full.from_user_id}`,
@@ -144,7 +157,10 @@ export async function processOneMessage(
     const label = refMediaItem ? "ref" : "inbound";
     const downloaded = await downloadMediaFromItem(mediaItem, {
       cdnBaseUrl: deps.cdnBaseUrl,
-      saveMedia: deps.channelRuntime.media.saveMediaBuffer,
+      saveMedia: hasMxcWeixinMediaPolicy()
+        ? (buffer, contentType, _subdir, maxBytes, originalFilename) =>
+            stageMxcWeixinInboundMedia(buffer, contentType, maxBytes, originalFilename)
+        : deps.channelRuntime.media.saveMediaBuffer,
       log: deps.log,
       errLog: deps.errLog,
       label,
@@ -230,6 +246,7 @@ export async function processOneMessage(
   const finalized = deps.channelRuntime.reply.finalizeInboundContext(
     ctx as Parameters<typeof deps.channelRuntime.reply.finalizeInboundContext>[0],
   );
+  assertMxcWeixinIngressReleased();
 
   logger.info(
     `inbound: from=${finalized.From} to=${finalized.To} bodyLen=${(finalized.Body ?? "").length} hasMedia=${Boolean(finalized.MediaPath ?? finalized.MediaUrl)}`,
@@ -311,11 +328,13 @@ export async function processOneMessage(
       typingCallbacks,
       deliver: async (payload) => {
         const rawText = payload.text ?? "";
+        const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.[0];
+        assertMxcWeixinIngressReleased();
+        if (mediaUrl) assertMxcWeixinOutboundMediaSource(mediaUrl);
         let text = (() => {
           const f = new StreamingMarkdownFilter();
           return f.feed(rawText) + f.flush();
         })();
-        const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.[0];
         logger.debug(`outbound payload: ${redactBody(JSON.stringify(payload))}`);
         logger.info(
           `outbound: to=${ctx.To} contextToken=${redactToken(contextToken)} textLen=${text.length} mediaUrl=${mediaUrl ? "present" : "none"}`,
@@ -344,21 +363,18 @@ export async function processOneMessage(
         text = sendingResult.text;
 
         try {
+          assertMxcWeixinIngressReleased();
           if (mediaUrl) {
             let filePath: string;
             if (!mediaUrl.includes("://") || mediaUrl.startsWith("file://")) {
-              if (mediaUrl.startsWith("file://")) {
-                filePath = new URL(mediaUrl).pathname;
-              } else if (!path.isAbsolute(mediaUrl)) {
-                filePath = path.resolve(mediaUrl);
-                logger.debug(`outbound: resolved relative path ${mediaUrl} -> ${filePath}`);
-              } else {
-                filePath = mediaUrl;
-              }
+              filePath = resolveWeixinLocalMediaPath(mediaUrl);
               logger.debug(`outbound: local file path resolved filePath=${filePath}`);
             } else if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
               logger.debug(`outbound: downloading remote mediaUrl=${mediaUrl.slice(0, 80)}...`);
-              filePath = await downloadRemoteImageToTemp(mediaUrl, MEDIA_OUTBOUND_TEMP_DIR);
+              filePath = await downloadRemoteImageToTemp(
+                mediaUrl,
+                resolveWeixinOutboundTempRoot(LEGACY_MEDIA_OUTBOUND_TEMP_DIR),
+              );
               logger.debug(`outbound: remote image downloaded to filePath=${filePath}`);
             } else {
               logger.warn(
@@ -374,6 +390,8 @@ export async function processOneMessage(
               logger.info(`outbound: text sent to=${ctx.To}`);
               return;
             }
+            filePath = await authorizeMxcWeixinOutboundMedia(filePath);
+            assertMxcWeixinIngressReleased();
             await sendWeixinMediaFile({
               filePath,
               to: ctx.To,
@@ -385,6 +403,7 @@ export async function processOneMessage(
             logger.info(`outbound: media sent OK to=${ctx.To}`);
           } else {
             logger.debug(`outbound: sending text message to=${ctx.To}`);
+            assertMxcWeixinIngressReleased();
             await sendMessageWeixin({ to: ctx.To, text, opts: {
               baseUrl: deps.baseUrl,
               token: deps.token,

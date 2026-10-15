@@ -348,7 +348,14 @@ contextBridge.exposeInMainWorld("openclaw", {
 
   windowsNodeMxc: {
     getStatus: () => ipcRenderer.invoke("windows-node-mxc:get-status"),
-    setEnabled: (params: { enabled: boolean; nodeId?: string }) =>
+    preflight: (params?: { requestedMode?: "off" | "full" | "limited-dacl" }) =>
+      ipcRenderer.invoke("windows-node-mxc:preflight", params),
+    setEnabled: (params: {
+      enabled?: boolean;
+      requestedMode?: "off" | "full" | "limited-dacl";
+      acknowledgeLimitedFilesystem?: boolean;
+      nodeId?: string;
+    }) =>
       ipcRenderer.invoke("windows-node-mxc:set-enabled", params),
     validateFolderPolicy: (draft: { rw: string[]; ro: string[] }) =>
       ipcRenderer.invoke("windows-node-mxc:validate-folder-policy", draft),

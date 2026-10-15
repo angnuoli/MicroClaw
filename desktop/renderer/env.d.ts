@@ -32,6 +32,26 @@ interface AppSettings {
   };
 }
 
+type WindowsNodeMxcAmbientAccessCategory =
+  | "desktop"
+  | "documents"
+  | "downloads"
+  | "microclaw-state"
+  | "openclaw-state"
+  | "openclaw-roaming-state"
+  | "ssh"
+  | "gnupg"
+  | "aws"
+  | "azure"
+  | "kube"
+  | "gcloud"
+  | "windows-credentials"
+  | "powershell-history"
+  | "browser-chrome"
+  | "browser-edge"
+  | "browser-brave"
+  | "browser-firefox";
+
 interface ChatAttachment {
   type: "image" | "file";
   mimeType: string;
@@ -256,7 +276,11 @@ interface OpenClawAPI {
     onExecCommand?(callback: (data: { shell: string; command: string }) => void): () => void;
   };
   cron: {
-    list(): Promise<{ jobs?: unknown[] }>;
+    list(): Promise<{
+      jobs?: unknown[];
+      pausedByMxc?: boolean;
+      requestedMode?: "off" | "full" | "limited-dacl";
+    }>;
   };
   agents: {
     list(): Promise<{ agents?: { id: string; name: string; description?: string }[] }>;
@@ -276,6 +300,9 @@ interface OpenClawAPI {
     weixin: {
       getStatus(): Promise<{
         enabled: boolean;
+        requestedEnabled: boolean;
+        effectiveEnabled: boolean;
+        pausedByMxc: boolean;
         installed: boolean;
         loggedIn: boolean;
         loginInProgress: boolean;
@@ -348,8 +375,24 @@ interface OpenClawAPI {
   };
   windowsNodeMxc: {
     getStatus(): Promise<{
+      requestedMode: "off" | "full" | "limited-dacl";
+      effectiveStrength: "off" | "full" | "limited-dacl";
+      effectiveTier: string | null;
       desiredEnabled: boolean;
       effectiveEnabled: boolean;
+      hooks: {
+        requestedExternalEnabled: boolean;
+        requestedInternalEnabled: boolean;
+        effectiveExternalEnabled: boolean;
+        effectiveInternalEnabled: boolean;
+        pausedByMxc: boolean;
+      };
+      canvas: {
+        state: "off" | "paused" | "active";
+        commandCount: 8;
+        nativeA2uiOnly: true;
+        localFilesAllowed: false;
+      };
       lifecycleState: {
         phase:
           | "idle"
@@ -359,6 +402,7 @@ interface OpenClawAPI {
           | "starting-locked"
           | "smoking-locked"
           | "starting-active"
+          | "promoting-active"
           | "smoking-active"
           | "verifying-active"
           | "starting-standard"
@@ -440,24 +484,57 @@ interface OpenClawAPI {
         needsDaclAugmentation: boolean;
         degraded: boolean;
         warnings: string[];
+        probes: {
+          baseContainerApiPresent: boolean | null;
+          bfscfgPresent: boolean | null;
+          bfsCompiledIn: boolean | null;
+        };
         reason: string | null;
       };
+      fullAvailability: {
+        available: boolean;
+        summary: string | null;
+        blockers: string[];
+        remediation: string[];
+      };
+      limitedAvailability: {
+        available: boolean;
+        summary: string | null;
+        blockers: string[];
+        remediation: string[];
+      };
+      ambientAccess: {
+        contract: "microclaw.windows-node-mxc-ambient-access.v1";
+        hash: string;
+        checkedAt: string;
+        entries: Array<{
+          category: WindowsNodeMxcAmbientAccessCategory;
+          status: "denied" | "read" | "read-write";
+        }>;
+      } | null;
       smoke: {
+        profile: "full-smoke" | "limited-minimal-smoke";
         gatewayGeneration: string;
         nodeId: string;
         settingsFingerprint: string;
         probeTier: string;
+        containmentStrength: "full" | "limited-dacl";
+        ambientAccessHash: string | null;
         checkedAt: string;
-        hostname: { outcome: string; reason: string };
-        powershell: { outcome: string; reason: string };
-        deniedOutsideRoot: { outcome: string; reason: string };
+        execution: { outcome: string; reason: string };
+        deniedOutsideRoot: { outcome: string; reason: string } | null;
       } | null;
       blockers: string[];
       warnings: string[];
       remediation: string[];
     }>;
+    preflight(params?: {
+      requestedMode?: "off" | "full" | "limited-dacl";
+    }): Promise<unknown>;
     setEnabled(params: {
-      enabled: boolean;
+      enabled?: boolean;
+      requestedMode?: "off" | "full" | "limited-dacl";
+      acknowledgeLimitedFilesystem?: boolean;
       nodeId?: string;
     }): Promise<Awaited<ReturnType<OpenClawAPI["windowsNodeMxc"]["getStatus"]>>>;
     validateFolderPolicy(draft: {
