@@ -11,12 +11,21 @@ const EXPECTED_VERSION = "2026.10.2";
 const EXPECTED_NODE_GATEWAY_MODULE = "nodes-CUbe_1MQ.mjs";
 const EXPECTED_NODE_GATEWAY_SHA256 =
   "3bc901af8f195d8b5d7ed41b2c50656f3da2ff160938d94d97d0c2fa8e42e676";
+const EXPECTED_NODE_INVOKE_PLUGIN_POLICY_MODULE = "node-invoke-plugin-policy-DLQRKKVA.mjs";
+const EXPECTED_NODE_INVOKE_PLUGIN_POLICY_SHA256 =
+  "6da4ee5c889ad2c236265b7f3290b4fd9c0ee1bcaa91bde0bd8f5a3c1ff532e9";
+const EXPECTED_NODE_REGISTRY_PRIVATE_MODULE = "node-registry-private-CyaYRwVd.mjs";
+const EXPECTED_NODE_REGISTRY_PRIVATE_SHA256 =
+  "31510d11a6f80614e8c1d3d3b3c44eec42a61feb17cb05e051ad613ce6475228";
 const EXPECTED_SYSTEM_RUN_MODULE = "system-run-approval-plan-Cu-Ftdkp.mjs";
 const EXPECTED_SYSTEM_RUN_SHA256 =
   "c0df5badb2a8cc6adfdfb8bac48e5379e0825005e0dec827d01b2fb3e223820e";
 const EXPECTED_EXEC_APPROVAL_MODULE = "exec-approval-mGU7M4-K.mjs";
 const EXPECTED_EXEC_APPROVAL_SHA256 =
   "aacf6a38e1ea77a9ce02fc4f60069230eec6b9c0a2e7123d35032eb105253267";
+const EXPECTED_BASH_TOOLS_MODULE = "bash-tools-Bl8Bd3CR.mjs";
+const EXPECTED_BASH_TOOLS_SHA256 =
+  "e5fd9fdfb6815da55188856b7215c406337f45d21b89fb87bb7a8a6ca48c0c90";
 const EXPECTED_WEB_TOOLS_MODULE = "openclaw-tools-Dxfbrtff.mjs";
 const EXPECTED_WEB_TOOLS_SHA256 =
   "181c5f9673480fbdacfa3ff88ae83686d8d1cb6402f583c3546d87b6e468d53e";
@@ -43,10 +52,190 @@ const EXPECTED_CANVAS_ELIGIBILITY_SHA256 =
   "4e80d6add8a2cd46f315e1698b65001fe837d1b16056a8255d34f546358c6431";
 export const APPROVAL_PROOF_CONTRACT = "microclaw.windows-node-approval.v1";
 export const APPROVAL_PROOF_PLAN_CONTRACT = "microclaw.windows-node-approval-plan.v2";
-export const APPROVAL_PROOF_TTL_MS = 15_000;
+export const APPROVAL_PROOF_TTL_MS = 30_000;
 const APPROVAL_PROOF_MINTER_SYMBOL = Symbol.for("microclaw.windows-node-mxc.approval-proof.v1");
 const HOOKS_GATE_SYMBOL = Symbol.for("microclaw.windows-node-mxc.hooks-gate.v1");
 const PRELOAD_INITIALIZED_ENV = "MICROCLAW_MXC_APPROVAL_PRELOAD_INITIALIZED";
+
+export function classifyWindowsNodeMxcInvokeFailure(error) {
+  const asRecord = (value) =>
+    value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const normalizeString = (value) =>
+    typeof value === "string" && value.length > 0 ? value : undefined;
+  const errorRecord = asRecord(error);
+  const details = asRecord(errorRecord?.details);
+  const nodeError = asRecord(details?.nodeError);
+  const nodeErrorDetails = asRecord(nodeError?.details);
+  const code = normalizeString(nodeError?.code);
+  const message =
+    normalizeString(nodeError?.message) ??
+    (error instanceof Error ? error.message : normalizeString(error)) ??
+    "node invoke failed";
+  const nodeCommandDispatched =
+    typeof details?.nodeCommandDispatched === "boolean"
+      ? details.nodeCommandDispatched
+      : undefined;
+  const requestSent =
+    typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : undefined;
+  if (
+    code === "SYSTEM_RUN_DENIED" ||
+    nodeErrorDetails?.executionState === "rejectedBeforeExecution"
+  ) {
+    return {
+      reason: "policy-denied",
+      retrySafe: false,
+      ...(code ? { code } : {}),
+      message,
+    };
+  }
+  if (code === "NOT_CONNECTED" && nodeCommandDispatched === false) {
+    return {
+      reason: "not-dispatched",
+      retrySafe: true,
+      code,
+      message,
+      nodeCommandDispatched,
+      ...(requestSent !== undefined ? { requestSent } : {}),
+    };
+  }
+  return {
+    reason: "outcome-unknown",
+    retrySafe: false,
+    ...(code ? { code } : {}),
+    message,
+    ...(nodeCommandDispatched !== undefined ? { nodeCommandDispatched } : {}),
+    ...(requestSent !== undefined ? { requestSent } : {}),
+  };
+}
+
+export function normalizeWindowsNodeSystemRunResponse(raw) {
+  const asRecord = (value) =>
+    value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const jsonEqual = (left, right) => {
+    if (Object.is(left, right)) return true;
+    if (Array.isArray(left) || Array.isArray(right)) {
+      return (
+        Array.isArray(left) &&
+        Array.isArray(right) &&
+        left.length === right.length &&
+        left.every((value, index) => jsonEqual(value, right[index]))
+      );
+    }
+    const leftRecord = asRecord(left);
+    const rightRecord = asRecord(right);
+    if (!leftRecord || !rightRecord) return false;
+    const leftKeys = Object.keys(leftRecord).sort();
+    const rightKeys = Object.keys(rightRecord).sort();
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every(
+        (key, index) =>
+          key === rightKeys[index] && jsonEqual(leftRecord[key], rightRecord[key]),
+      )
+    );
+  };
+
+  const outer = asRecord(raw);
+  const nested = asRecord(outer?.payload);
+  const response =
+    outer?.command === "system.run"
+      ? outer
+      : outer?.ok === true &&
+          (outer.type === undefined || outer.type === "res") &&
+          outer.error == null &&
+          outer.command === undefined &&
+          outer.nodeId === undefined &&
+          outer.payloadJSON === undefined &&
+          nested?.command === "system.run"
+        ? nested
+        : null;
+  const payload = asRecord(response?.payload);
+  const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+  if (
+    response?.ok !== true ||
+    response.command !== "system.run" ||
+    typeof payload?.success !== "boolean" ||
+    hasOwn(payload, "payload") ||
+    hasOwn(payload, "payloadJSON") ||
+    hasOwn(payload, "ok") ||
+    hasOwn(payload, "command")
+  ) {
+    return null;
+  }
+  const rejectedBeforeExecution =
+    payload.success === false &&
+    payload.executionState === "rejectedBeforeExecution" &&
+    payload.exitCode === null &&
+    payload.timedOut === false &&
+    typeof payload.error === "string" &&
+    payload.error.length > 0 &&
+    typeof payload.errorCode === "string" &&
+    payload.errorCode.length > 0;
+  const completed =
+    payload.executionState === undefined &&
+    typeof payload.stdout === "string" &&
+    typeof payload.stderr === "string" &&
+    typeof payload.exitCode === "number" &&
+    Number.isSafeInteger(payload.exitCode) &&
+    typeof payload.timedOut === "boolean" &&
+    typeof payload.durationMs === "number" &&
+    Number.isFinite(payload.durationMs) &&
+    payload.durationMs >= 0 &&
+    payload.success === (payload.exitCode === 0 && !payload.timedOut);
+  if (!rejectedBeforeExecution && !completed) return null;
+  if (response.payloadJSON !== undefined && response.payloadJSON !== null) {
+    if (typeof response.payloadJSON !== "string") return null;
+    let serializedPayload;
+    try {
+      serializedPayload = JSON.parse(response.payloadJSON);
+    } catch {
+      return null;
+    }
+    if (!jsonEqual(payload, serializedPayload)) return null;
+  }
+  return { raw: response, payload };
+}
+
+export function describeWindowsNodeSystemRunResponseShape(raw) {
+  const describe = (value) => {
+    if (value === null) return "null";
+    if (Array.isArray(value)) return "array";
+    if (typeof value !== "object") return typeof value;
+    return Object.keys(value).sort().join(",");
+  };
+  const outer = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
+  const outerPayload =
+    outer?.payload && typeof outer.payload === "object" && !Array.isArray(outer.payload)
+      ? outer.payload
+      : null;
+  const nestedPayload =
+    outerPayload?.payload &&
+    typeof outerPayload.payload === "object" &&
+    !Array.isArray(outerPayload.payload)
+      ? outerPayload.payload
+      : null;
+  return [
+    `outer=${describe(raw)}`,
+    `outerPayload=${describe(outer?.payload)}`,
+    `nestedPayload=${describe(nestedPayload)}`,
+    `payloadJSON=${describe(outer?.payloadJSON ?? outerPayload?.payloadJSON)}`,
+  ].join(" ");
+}
+
+export function buildMicroclawWindowsNodeShellCommand(command, env = process.env) {
+  const windowsRoot = (env.SystemRoot ?? env.WINDIR ?? "C:\\Windows").replace(
+    /[\\/]+$/,
+    "",
+  );
+  return [
+    `${windowsRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    command,
+  ];
+}
 
 export const PINNED_WEB_FETCH_HTTP_ONLY_SOURCE =
   'if (!["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("Invalid URL: must be http or https");';
@@ -64,6 +253,15 @@ const PATCHED_NODE_GATEWAY_MINT_INSERT_SOURCE = `function mintMicroclawNodeAppro
 \tconst minter = globalThis[Symbol.for("microclaw.windows-node-mxc.approval-proof.v1")];
 \tif (!minter || typeof minter.mint !== "function") throw new Error("MicroClaw node approval proof minter is unavailable");
 \treturn minter.mint(params);
+}
+function attachMicroclawNodeApprovalProof(params, request) {
+\tif (!request) return;
+\tconst proof = mintMicroclawNodeApprovalProof(request);
+\tparams.microclawApprovalProof = proof;
+\tconst forwardedAtUnixMs = Date.now();
+\tconst decisionAtUnixMs = Number.isFinite(request.decisionAtUnixMs) ? request.decisionAtUnixMs : proof.issuedAtUnixMs;
+\tconsole.error(\`[microclaw-approval-timing] stage=proof-mint decisionAtUnixMs=\${decisionAtUnixMs} proofIssuedAtUnixMs=\${proof.issuedAtUnixMs} decisionToMintMs=\${Math.max(0, proof.issuedAtUnixMs - decisionAtUnixMs)}\`);
+\tconsole.error(\`[microclaw-approval-timing] stage=gateway-forward forwardAtUnixMs=\${forwardedAtUnixMs} proofAgeMs=\${Math.max(0, forwardedAtUnixMs - proof.issuedAtUnixMs)}\`);
 }
 async function sanitizeSystemRunParamsForForwarding(opts) {`;
 
@@ -102,23 +300,153 @@ const PATCHED_NODE_GATEWAY_APPROVAL_SOURCE = `\tconst approvalDecision = snapsho
 \t\t\tdetails: { runId }
 \t\t});
 \t\tif (approvalDecision !== "allow-once" || recordedResolutionSource !== "operator") return systemRunApprovalRequired(runId);
+\t\tif (!runtimeContext.plan) return systemRunApprovalGuardError({
+\t\t\tcode: "APPROVAL_PLAN_REQUIRED",
+\t\t\tmessage: "operator approval requires an approved execution plan",
+\t\t\tdetails: { runId }
+\t\t});
 \t\tif (typeof manager.consumeAllowOnce !== "function" || !await manager.consumeAllowOnce(runId)) return systemRunApprovalRequired(runId);
 \t\tnext.approved = true;
 \t\tnext.approvalDecision = "allow-once";
-\t\tnext.microclawApprovalProof = mintMicroclawNodeApprovalProof({
-\t\t\tapprovalId: runId,
-\t\t\tnodeId: targetNodeId,
-\t\t\tplan: runtimeContext.plan
-\t\t});
 \t\treturn {
 \t\t\tok: true,
 \t\t\tparams: next,
 \t\t\tapprovalAuthority: {
 \t\t\t\trecordId: runId,
 \t\t\t\tdecision: "allow-once"
+\t\t\t},
+\t\t\tmicroclawApprovalProofRequest: {
+\t\t\t\tapprovalId: runId,
+\t\t\t\tnodeId: targetNodeId,
+\t\t\t\tplan: runtimeContext.plan,
+\t\t\t\tdecisionAtUnixMs: snapshot.resolvedAtMs ?? nowMs
 \t\t\t}
 \t\t};
 \t}`;
+
+export const PINNED_NODE_GATEWAY_PLUGIN_DISPATCH_SOURCE = `\t\t\t\t\tonNodeCommandDispatched: () => {
+\t\t\t\t\t\tnodeCommandDispatched = true;
+\t\t\t\t\t},`;
+const PATCHED_NODE_GATEWAY_PLUGIN_DISPATCH_SOURCE = `\t\t\t\t\tonNodeCommandDispatched: () => {
+\t\t\t\t\t\tnodeCommandDispatched = true;
+\t\t\t\t\t},
+\t\t\t\t\tonNodeCommandDispatchPreparing: (dispatchParams) => {
+\t\t\t\t\t\tattachMicroclawNodeApprovalProof(dispatchParams, forwardedParams.microclawApprovalProofRequest);
+\t\t\t\t\t},`;
+
+export const PINNED_NODE_GATEWAY_DIRECT_DISPATCH_SOURCE = `\t\t\t\t\tonDispatchReady: (invokeId) => {
+\t\t\t\t\t\tnodeCommandDispatched = true;
+\t\t\t\t\t\tnodeInvokeStream?.onDispatchReady(invokeId);
+\t\t\t\t\t}`;
+const PATCHED_NODE_GATEWAY_DIRECT_DISPATCH_SOURCE = `\t\t\t\t\tonDispatchReady: (invokeId) => {
+\t\t\t\t\t\tnodeCommandDispatched = true;
+\t\t\t\t\t\tnodeInvokeStream?.onDispatchReady(invokeId);
+\t\t\t\t\t},
+\t\t\t\t\tonDispatchPreparing: (dispatchParams) => {
+\t\t\t\t\t\tattachMicroclawNodeApprovalProof(dispatchParams, forwardedParams.microclawApprovalProofRequest);
+\t\t\t\t\t}`;
+
+export const PINNED_NODE_INVOKE_PLUGIN_REQUEST_SOURCE = `\t\tconst request = {
+\t\t\tnodeId: params.nodeSession.nodeId,
+\t\t\texpectedConnId: params.nodeSession.connId,
+\t\t\t...params.nodeSession.pairingGeneration ? { expectedPairingGeneration: params.nodeSession.pairingGeneration } : {},
+\t\t\tcommand: params.command,
+\t\t\tparams: override.params ?? params.params,`;
+const PATCHED_NODE_INVOKE_PLUGIN_REQUEST_SOURCE = `\t\tconst requestParams = override.params ?? params.params;
+\t\tconst request = {
+\t\t\tnodeId: params.nodeSession.nodeId,
+\t\t\texpectedConnId: params.nodeSession.connId,
+\t\t\t...params.nodeSession.pairingGeneration ? { expectedPairingGeneration: params.nodeSession.pairingGeneration } : {},
+\t\t\tcommand: params.command,
+\t\t\tparams: requestParams,`;
+
+export const PINNED_NODE_INVOKE_PLUGIN_DISPATCH_SOURCE = `\t\t\tonDispatchReady: (invokeId) => {
+\t\t\t\tnodeCommandDispatched = true;
+\t\t\t\tparams.onNodeCommandDispatched?.();
+\t\t\t\tparams.nodeInvokeStream?.onDispatchReady(invokeId);
+\t\t\t}
+\t\t};
+\t\tconst res = params.privateTransport ? await params.privateTransport.invoke(request) : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
+\t\t\t...request,
+\t\t\tdeadlineAtMs
+\t\t});`;
+const PATCHED_NODE_INVOKE_PLUGIN_DISPATCH_SOURCE = `\t\t\tonDispatchReady: (invokeId) => {
+\t\t\t\tnodeCommandDispatched = true;
+\t\t\t\tparams.onNodeCommandDispatched?.();
+\t\t\t\tparams.nodeInvokeStream?.onDispatchReady(invokeId);
+\t\t\t},
+\t\t\tonDispatchPreparing: () => {
+\t\t\t\tparams.onNodeCommandDispatchPreparing?.(requestParams);
+\t\t\t}
+\t\t};
+\t\tif (params.privateTransport) request.onDispatchPreparing();
+\t\tconst res = params.privateTransport ? await params.privateTransport.invoke(request) : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
+\t\t\t...request,
+\t\t\tdeadlineAtMs
+\t\t});`;
+
+export const PINNED_NODE_REGISTRY_SERIALIZATION_SOURCE = `\tconst requestId = randomUUID();
+\tconst invokeParams = normalizeSystemRunInvokeParams({
+\t\tcommand: params.command,
+\t\tparams: params.params
+\t});
+\tconst payload = buildNodeInvokeRequest({
+\t\tid: requestId,
+\t\tnodeId: params.nodeId,
+\t\tcommand: params.command,
+\t\tparams: "params" in params ? invokeParams : void 0,
+\t\ttimeoutMs,
+\t\tidempotencyKey: params.idempotencyKey,
+\t\tsessionKey: params.sessionKey
+\t});
+\tif (params.command === "worker.launch.v1" && Buffer.byteLength(serializeNodeEvent("node.invoke.request", payload), "utf8") > 26214400) return {
+\t\tok: false,
+\t\terror: {
+\t\t\tcode: "INVALID_REQUEST",
+\t\t\tmessage: "worker launch exceeds the node payload limit"
+\t\t}
+\t};
+\tconst systemRunEvent = resolvePendingSystemRunEvent({
+\t\tcommand: params.command,
+\t\tparams: invokeParams
+\t});`;
+const PATCHED_NODE_REGISTRY_SERIALIZATION_SOURCE = `\tconst requestId = randomUUID();
+\tlet payloadTimeoutMs = timeoutMs;
+\tlet invokeParams;
+\tlet payload;
+\tlet systemRunEvent;`;
+
+export const PINNED_NODE_REGISTRY_PRE_DISPATCH_SOURCE = `\t\tpayload.timeoutMs = Math.ceil(timeoutMs);
+\t}
+\tconst result = new Promise((resolve, reject) => {`;
+const PATCHED_NODE_REGISTRY_PRE_DISPATCH_SOURCE = `\t\tpayloadTimeoutMs = Math.ceil(timeoutMs);
+\t}
+\tparams.onDispatchPreparing?.(params.params);
+\tinvokeParams = normalizeSystemRunInvokeParams({
+\t\tcommand: params.command,
+\t\tparams: params.params
+\t});
+\tpayload = buildNodeInvokeRequest({
+\t\tid: requestId,
+\t\tnodeId: params.nodeId,
+\t\tcommand: params.command,
+\t\tparams: "params" in params ? invokeParams : void 0,
+\t\ttimeoutMs: payloadTimeoutMs,
+\t\tidempotencyKey: params.idempotencyKey,
+\t\tsessionKey: params.sessionKey
+\t});
+\tif (params.command === "worker.launch.v1" && Buffer.byteLength(serializeNodeEvent("node.invoke.request", payload), "utf8") > 26214400) return {
+\t\tok: false,
+\t\terror: {
+\t\t\tcode: "INVALID_REQUEST",
+\t\t\tmessage: "worker launch exceeds the node payload limit"
+\t\t}
+\t};
+\tsystemRunEvent = resolvePendingSystemRunEvent({
+\t\tcommand: params.command,
+\t\tparams: invokeParams
+\t});
+\tconst result = new Promise((resolve, reject) => {`;
 
 export const PINNED_NODE_GATEWAY_ASK_FALLBACK_SOURCE = `\tif (timedOut && approvalSource === "ask-fallback" && !approved && requestedDecision === null && clientHasApprovals(opts.client)) {
 \t\tif (!runtimeContext.plan) return systemRunApprovalGuardError({
@@ -243,11 +571,53 @@ export function patchPinnedOpenClawNodeGateway(source) {
     PATCHED_NODE_GATEWAY_APPROVAL_SOURCE,
     "node approval proof handoff",
   );
-  return replaceExactlyOnce(
+  patched = replaceExactlyOnce(
     patched,
     PINNED_NODE_GATEWAY_ASK_FALLBACK_SOURCE,
     PATCHED_NODE_GATEWAY_ASK_FALLBACK_SOURCE,
     "node ask-fallback approval proof handoff",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_NODE_GATEWAY_PLUGIN_DISPATCH_SOURCE,
+    PATCHED_NODE_GATEWAY_PLUGIN_DISPATCH_SOURCE,
+    "plugin node approval proof dispatch boundary",
+  );
+  return replaceExactlyOnce(
+    patched,
+    PINNED_NODE_GATEWAY_DIRECT_DISPATCH_SOURCE,
+    PATCHED_NODE_GATEWAY_DIRECT_DISPATCH_SOURCE,
+    "direct node approval proof dispatch boundary",
+  );
+}
+
+export function patchPinnedOpenClawNodeInvokePluginPolicy(source) {
+  let patched = replaceExactlyOnce(
+    source,
+    PINNED_NODE_INVOKE_PLUGIN_REQUEST_SOURCE,
+    PATCHED_NODE_INVOKE_PLUGIN_REQUEST_SOURCE,
+    "plugin final node invoke params",
+  );
+  return replaceExactlyOnce(
+    patched,
+    PINNED_NODE_INVOKE_PLUGIN_DISPATCH_SOURCE,
+    PATCHED_NODE_INVOKE_PLUGIN_DISPATCH_SOURCE,
+    "plugin pre-serialization node dispatch callback",
+  );
+}
+
+export function patchPinnedOpenClawNodeRegistryPrivate(source) {
+  let patched = replaceExactlyOnce(
+    source,
+    PINNED_NODE_REGISTRY_SERIALIZATION_SOURCE,
+    PATCHED_NODE_REGISTRY_SERIALIZATION_SOURCE,
+    "node registry deferred serialization",
+  );
+  return replaceExactlyOnce(
+    patched,
+    PINNED_NODE_REGISTRY_PRE_DISPATCH_SOURCE,
+    PATCHED_NODE_REGISTRY_PRE_DISPATCH_SOURCE,
+    "node registry pre-serialization dispatch callback",
   );
 }
 
@@ -266,6 +636,324 @@ export function patchPinnedOpenClawExecApproval(source) {
     PINNED_EXEC_APPROVAL_VALIDATION_SOURCE,
     PATCHED_EXEC_APPROVAL_VALIDATION_SOURCE,
     "exec approval schema projection",
+  );
+}
+
+export const PINNED_BASH_TOOLS_FAILURE_CLASSIFIER_SOURCE = `/** Only NOT_CONNECTED plus explicit pre-dispatch provenance proves a retry cannot duplicate work. */
+function classifyNodeInvokeFailure(error) {
+\tconst errorRecord = asNullableRecord(error);
+\tconst details = asNullableRecord(errorRecord?.details);
+\tconst nodeError = asNullableRecord(details?.nodeError);
+\tconst code = normalizeOptionalString(nodeError?.code);
+\tconst message = normalizeOptionalString(nodeError?.message) ?? (error instanceof Error ? error.message : normalizeOptionalString(error)) ?? "node invoke failed";
+\tconst nodeCommandDispatched = typeof details?.nodeCommandDispatched === "boolean" ? details.nodeCommandDispatched : void 0;
+\tconst requestSent = typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : void 0;
+\tif (code === "SYSTEM_RUN_DENIED") return {
+\t\treason: "policy-denied",
+\t\tretrySafe: false,
+\t\tcode,
+\t\tmessage
+\t};
+\tif (code === "NOT_CONNECTED" && nodeCommandDispatched === false) return {
+\t\treason: "not-dispatched",
+\t\tretrySafe: true,
+\t\tcode,
+\t\tmessage,
+\t\tnodeCommandDispatched,
+\t\t...requestSent !== void 0 ? { requestSent } : {}
+\t};
+\treturn {
+\t\treason: "outcome-unknown",
+\t\tretrySafe: false,
+\t\t...code ? { code } : {},
+\t\tmessage,
+\t\t...nodeCommandDispatched !== void 0 ? { nodeCommandDispatched } : {},
+\t\t...requestSent !== void 0 ? { requestSent } : {}
+\t};
+}`;
+
+const PATCHED_BASH_TOOLS_FAILURE_CLASSIFIER_SOURCE = `/** Only explicit trusted provenance can prove that node execution did not begin. */
+function classifyNodeInvokeFailure(error) {
+\tconst errorRecord = asNullableRecord(error);
+\tconst details = asNullableRecord(errorRecord?.details);
+\tconst nodeError = asNullableRecord(details?.nodeError);
+\tconst nodeErrorDetails = asNullableRecord(nodeError?.details);
+\tconst code = normalizeOptionalString(nodeError?.code);
+\tconst message = normalizeOptionalString(nodeError?.message) ?? (error instanceof Error ? error.message : normalizeOptionalString(error)) ?? "node invoke failed";
+\tconst nodeCommandDispatched = typeof details?.nodeCommandDispatched === "boolean" ? details.nodeCommandDispatched : void 0;
+\tconst requestSent = typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : void 0;
+\tif (code === "SYSTEM_RUN_DENIED" || nodeErrorDetails?.executionState === "rejectedBeforeExecution") return {
+\t\treason: "policy-denied",
+\t\tretrySafe: false,
+\t\t...code ? { code } : {},
+\t\tmessage
+\t};
+\tif (code === "NOT_CONNECTED" && nodeCommandDispatched === false) return {
+\t\treason: "not-dispatched",
+\t\tretrySafe: true,
+\t\tcode,
+\t\tmessage,
+\t\tnodeCommandDispatched,
+\t\t...requestSent !== void 0 ? { requestSent } : {}
+\t};
+\treturn {
+\t\treason: "outcome-unknown",
+\t\tretrySafe: false,
+\t\t...code ? { code } : {},
+\t\tmessage,
+\t\t...nodeCommandDispatched !== void 0 ? { nodeCommandDispatched } : {},
+\t\t...requestSent !== void 0 ? { requestSent } : {}
+\t};
+}`;
+
+export const PINNED_BASH_TOOLS_FAILURE_REGION_SOURCE = `//#region src/agents/bash-tools.exec-host-node-failure.ts
+/** Only explicit trusted provenance can prove that node execution did not begin. */`;
+
+const PATCHED_BASH_TOOLS_FAILURE_REGION_SOURCE = `//#region src/agents/bash-tools.exec-host-node-failure.ts
+const microclawUnresolvedNodeRuns = new Map();
+function buildMicroclawUnresolvedNodeRunKey(nodeId, plan) {
+\treturn crypto.createHash("sha256").update(JSON.stringify({
+\t\tnodeId,
+\t\tplan
+\t})).digest("hex");
+}
+function findMicroclawUnresolvedNodeRun(key) {
+\treturn microclawUnresolvedNodeRuns.get(key) ?? null;
+}
+function recordMicroclawUnresolvedNodeRun(key, failure) {
+\tif (failure.reason !== "outcome-unknown") return;
+\tmicroclawUnresolvedNodeRuns.set(key, {
+\t\tmessage: failure.message
+\t});
+}
+function formatMicroclawUnresolvedNodeRunResult(params) {
+\tconst text = [
+\t\t\`An earlier dispatch of this exact command to \${params.nodeId} still has an unresolved outcome.\`,
+\t\t"MicroClaw blocked a duplicate approval and execution request. Reconcile the target state; do not retry automatically.",
+\t\t"",
+\t\t"Command:",
+\t\tparams.command,
+\t\t"",
+\t\t\`Details: \${params.entry.message}\`
+\t].join("\\n");
+\treturn {
+\t\tcontent: [{
+\t\t\ttype: "text",
+\t\t\ttext: renderExecUpdateText({
+\t\t\t\ttailText: text,
+\t\t\t\twarnings: params.warnings ?? []
+\t\t\t})
+\t\t}],
+\t\tdetails: {
+\t\t\tstatus: "failed",
+\t\t\texitCode: null,
+\t\t\tfailureKind: "outcome-unknown-deduplicated",
+\t\t\treason: "outcome-unknown",
+\t\t\tdurationMs: 0,
+\t\t\taggregated: text,
+\t\t\tcwd: params.cwd
+\t\t}
+\t};
+}
+/** Only explicit trusted provenance can prove that node execution did not begin. */`;
+
+export const PINNED_BASH_TOOLS_POLICY_DENIED_GUIDANCE_SOURCE =
+  'params.failure.reason === "policy-denied" ? [`Node command was denied before execution on ${params.nodeId}.`, "Resolve the reported refusal before retrying."]';
+const PATCHED_BASH_TOOLS_POLICY_DENIED_GUIDANCE_SOURCE =
+  'params.failure.reason === "policy-denied" ? [`Node command was denied before execution on ${params.nodeId}.`, "Do not retry this command automatically. Do not switch to gateway or sandbox execution. Surface the refusal to the user."]';
+
+export const PINNED_BASH_TOOLS_HOST_SELECTION_SOURCE = `\t\t\tconst host = target.effectiveHost;
+\t\t\tconst explicitSecurity = defaults?.security;`;
+const PATCHED_BASH_TOOLS_HOST_SELECTION_SOURCE = `\t\t\tconst host = target.effectiveHost;
+\t\t\tif (process.env.MICROCLAW_WINDOWS_NODE_MXC_APPROVAL_COMPAT === "1" && host !== "node") throw new Error("MicroClaw MXC execution is locked to host=node. Do not retry with gateway or sandbox host overrides.");
+\t\t\tconst explicitSecurity = defaults?.security;`;
+
+export const PINNED_BASH_TOOLS_PREPARED_SOURCE = `\tconst prepared = await prepareNodeSystemRun({
+\t\trequest: {
+\t\t\t...params,
+\t\t\tsecurity: hostSecurity,
+\t\t\task: hostAsk
+\t\t},
+\t\ttarget
+\t});
+\tconst approvalAnalysis = await analyzeNodeApprovalRequirement({`;
+
+const PATCHED_BASH_TOOLS_PREPARED_SOURCE = `\tconst prepared = await prepareNodeSystemRun({
+\t\trequest: {
+\t\t\t...params,
+\t\t\tsecurity: hostSecurity,
+\t\t\task: hostAsk
+\t\t},
+\t\ttarget
+\t});
+\tconst microclawUnresolvedRunKey = buildMicroclawUnresolvedNodeRunKey(target.nodeId, prepared.plan);
+\tconst microclawUnresolvedRun = findMicroclawUnresolvedNodeRun(microclawUnresolvedRunKey);
+\tif (microclawUnresolvedRun) return formatMicroclawUnresolvedNodeRunResult({
+\t\tentry: microclawUnresolvedRun,
+\t\tnodeId: target.nodeId,
+\t\tcommand: params.command,
+\t\tcwd: prepared.cwd,
+\t\twarnings: params.warnings
+\t});
+\tconst approvalAnalysis = await analyzeNodeApprovalRequirement({`;
+
+export const PINNED_BASH_TOOLS_DISPATCH_FAILURE_SOURCE = `\tif (!result.ok) return formatNodeInvokeFailureToolResult({
+\t\tfailure: result.failure,
+\t\tnodeId: params.target.nodeId,
+\t\tcommand: params.request.command,
+\t\tstartedAt,
+\t\tcwd: params.request.workdir,
+\t\twarnings: [...params.request.warnings, ...params.request.foregroundWarnings ?? []]
+\t});`;
+
+const PATCHED_BASH_TOOLS_DISPATCH_FAILURE_SOURCE = `\tif (!result.ok) {
+\t\trecordMicroclawUnresolvedNodeRun(params.microclawUnresolvedRunKey, result.failure);
+\t\treturn formatNodeInvokeFailureToolResult({
+\t\t\tfailure: result.failure,
+\t\t\tnodeId: params.target.nodeId,
+\t\t\tcommand: params.request.command,
+\t\t\tstartedAt,
+\t\t\tcwd: params.request.workdir,
+\t\t\twarnings: [...params.request.warnings, ...params.request.foregroundWarnings ?? []]
+\t\t});
+\t}`;
+
+export const PINNED_BASH_TOOLS_FOLLOWUP_FAILURE_SOURCE = `\t\t\t\t\t\tif (!invocation.ok) {
+\t\t\t\t\t\t\tawait sendExecApprovalFollowupResult(followupTarget, formatNodeInvokeFailureFollowup({`;
+
+const PATCHED_BASH_TOOLS_FOLLOWUP_FAILURE_SOURCE = `\t\t\t\t\t\tif (!invocation.ok) {
+\t\t\t\t\t\t\trecordMicroclawUnresolvedNodeRun(microclawUnresolvedRunKey, invocation.failure);
+\t\t\t\t\t\t\tawait sendExecApprovalFollowupResult(followupTarget, formatNodeInvokeFailureFollowup({`;
+
+export const PINNED_BASH_TOOLS_FINAL_DISPATCH_SOURCE = `\treturn dispatchNodeSystemRun({
+\t\trequest: params,
+\t\ttarget,
+\t\tinvoke,
+\t\t...(inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId ? { scopes: APPROVED_NODE_INVOKE_SCOPES } : {}
+\t});`;
+
+const PATCHED_BASH_TOOLS_FINAL_DISPATCH_SOURCE = `\treturn dispatchNodeSystemRun({
+\t\trequest: params,
+\t\ttarget,
+\t\tinvoke,
+\t\tmicroclawUnresolvedRunKey,
+\t\t...(inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId ? { scopes: APPROVED_NODE_INVOKE_SCOPES } : {}
+\t});`;
+
+export const PINNED_BASH_TOOLS_INVOKE_RESULT_SOURCE = `\t\tconst raw = await callGatewayTool("node.invoke", { timeoutMs: params.invokeWaitMs }, params.invoke, callOptions);
+\t\tif (typeof asNullableRecord(asNullableRecord(raw)?.payload)?.success !== "boolean") return {
+\t\t\tok: false,
+\t\t\tfailure: {
+\t\t\t\treason: "outcome-unknown",
+\t\t\t\tretrySafe: false,
+\t\t\t\tmessage: "malformed node invoke response"
+\t\t\t}
+\t\t};
+\t\treturn {
+\t\t\tok: true,
+\t\t\traw
+\t\t};`;
+
+export const PINNED_BASH_TOOLS_WINDOWS_SHELL_SOURCE = `\tif (normalized.startsWith("win")) return [
+\t\t"cmd.exe",
+\t\t"/d",
+\t\t"/s",
+\t\t"/c",
+\t\tcommand
+\t];`;
+
+const PATCHED_BASH_TOOLS_WINDOWS_SHELL_SOURCE = `\tif (normalized.startsWith("win")) {
+\t\tconst buildMicroclawWindowsNodeShellCommand = ${buildMicroclawWindowsNodeShellCommand.toString()};
+\t\treturn buildMicroclawWindowsNodeShellCommand(command, process.env);
+\t}`;
+
+const PATCHED_BASH_TOOLS_INVOKE_RESULT_SOURCE = `\t\tconst raw = await callGatewayTool("node.invoke", { timeoutMs: params.invokeWaitMs }, params.invoke, callOptions);
+\t\tconst normalizeMicroclawNodeSystemRunResponse = ${normalizeWindowsNodeSystemRunResponse.toString()};
+\t\tconst describeMicroclawNodeSystemRunResponseShape = ${describeWindowsNodeSystemRunResponseShape.toString()};
+\t\tconst normalized = normalizeMicroclawNodeSystemRunResponse(raw);
+\t\tif (!normalized) return {
+\t\t\tok: false,
+\t\t\tfailure: {
+\t\t\t\treason: "outcome-unknown",
+\t\t\t\tretrySafe: false,
+\t\t\t\tmessage: \`malformed node invoke response (\${describeMicroclawNodeSystemRunResponseShape(raw)})\`
+\t\t\t}
+\t\t};
+\t\tconst { payload } = normalized;
+\t\tif (payload.success === false && payload.executionState === "rejectedBeforeExecution") return {
+\t\t\tok: false,
+\t\t\tfailure: {
+\t\t\t\treason: "policy-denied",
+\t\t\t\tretrySafe: false,
+\t\t\t\t...normalizeOptionalString(payload.errorCode) ? { code: normalizeOptionalString(payload.errorCode) } : {},
+\t\t\t\tmessage: normalizeOptionalString(payload.error) ?? "node command rejected before execution"
+\t\t\t}
+\t\t};
+\t\treturn {
+\t\t\tok: true,
+\t\t\traw: normalized.raw
+\t\t};`;
+
+export function patchPinnedOpenClawBashTools(source) {
+  let patched = replaceExactlyOnce(
+    source,
+    PINNED_BASH_TOOLS_FAILURE_CLASSIFIER_SOURCE,
+    PATCHED_BASH_TOOLS_FAILURE_CLASSIFIER_SOURCE,
+    "node pre-execution failure classification",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_FAILURE_REGION_SOURCE,
+    PATCHED_BASH_TOOLS_FAILURE_REGION_SOURCE,
+    "node unresolved-outcome cache insertion",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_POLICY_DENIED_GUIDANCE_SOURCE,
+    PATCHED_BASH_TOOLS_POLICY_DENIED_GUIDANCE_SOURCE,
+    "node pre-execution retry guidance",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_PREPARED_SOURCE,
+    PATCHED_BASH_TOOLS_PREPARED_SOURCE,
+    "node unresolved-outcome pre-approval deduplication",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_DISPATCH_FAILURE_SOURCE,
+    PATCHED_BASH_TOOLS_DISPATCH_FAILURE_SOURCE,
+    "node synchronous unresolved-outcome recording",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_FOLLOWUP_FAILURE_SOURCE,
+    PATCHED_BASH_TOOLS_FOLLOWUP_FAILURE_SOURCE,
+    "node approval follow-up unresolved-outcome recording",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_INVOKE_RESULT_SOURCE,
+    PATCHED_BASH_TOOLS_INVOKE_RESULT_SOURCE,
+    "node semantic pre-execution rejection classification",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_WINDOWS_SHELL_SOURCE,
+    PATCHED_BASH_TOOLS_WINDOWS_SHELL_SOURCE,
+    "Windows node PowerShell selection",
+  );
+  patched = replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_FINAL_DISPATCH_SOURCE,
+    PATCHED_BASH_TOOLS_FINAL_DISPATCH_SOURCE,
+    "node unresolved-outcome dispatch identity",
+  );
+  return replaceExactlyOnce(
+    patched,
+    PINNED_BASH_TOOLS_HOST_SELECTION_SOURCE,
+    PATCHED_BASH_TOOLS_HOST_SELECTION_SOURCE,
+    "MXC exec host lock",
   );
 }
 
@@ -919,6 +1607,16 @@ export function validatePinnedOpenClawApprovalPackage(
         patch: patchPinnedOpenClawNodeGateway,
       },
       {
+        module: EXPECTED_NODE_INVOKE_PLUGIN_POLICY_MODULE,
+        sha256: EXPECTED_NODE_INVOKE_PLUGIN_POLICY_SHA256,
+        patch: patchPinnedOpenClawNodeInvokePluginPolicy,
+      },
+      {
+        module: EXPECTED_NODE_REGISTRY_PRIVATE_MODULE,
+        sha256: EXPECTED_NODE_REGISTRY_PRIVATE_SHA256,
+        patch: patchPinnedOpenClawNodeRegistryPrivate,
+      },
+      {
         module: EXPECTED_SYSTEM_RUN_MODULE,
         sha256: EXPECTED_SYSTEM_RUN_SHA256,
         patch: patchPinnedOpenClawSystemRun,
@@ -927,6 +1625,11 @@ export function validatePinnedOpenClawApprovalPackage(
         module: EXPECTED_EXEC_APPROVAL_MODULE,
         sha256: EXPECTED_EXEC_APPROVAL_SHA256,
         patch: patchPinnedOpenClawExecApproval,
+      },
+      {
+        module: EXPECTED_BASH_TOOLS_MODULE,
+        sha256: EXPECTED_BASH_TOOLS_SHA256,
+        patch: patchPinnedOpenClawBashTools,
       },
       {
         module: EXPECTED_WEB_TOOLS_MODULE,

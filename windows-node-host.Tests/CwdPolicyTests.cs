@@ -21,6 +21,72 @@ public sealed class CwdPolicyTests : IDisposable
         Directory.CreateDirectory(_root);
     }
 
+    [Theory]
+    [InlineData(0, false, true)]
+    [InlineData(7, false, false)]
+    [InlineData(0, true, false)]
+    public void CompletedSystemRunPayloadIncludesRequiredSuccess(
+        int exitCode,
+        bool timedOut,
+        bool expectedSuccess)
+    {
+        var response = BundledSystemCapability.Completed(
+            "stdout",
+            "stderr",
+            exitCode,
+            timedOut,
+            123,
+            "limited-dacl",
+            "limited-dacl");
+
+        Assert.True(response.Ok);
+        var payload = JsonSerializer.SerializeToElement(response.Payload);
+        Assert.Equal(expectedSuccess, payload.GetProperty("success").GetBoolean());
+        Assert.Equal(exitCode, payload.GetProperty("exitCode").GetInt32());
+        Assert.Equal(timedOut, payload.GetProperty("timedOut").GetBoolean());
+        Assert.Equal("stdout", payload.GetProperty("stdout").GetString());
+        Assert.Equal("stderr", payload.GetProperty("stderr").GetString());
+    }
+
+    [Theory]
+    [InlineData("New-Item -ItemType Directory -Path \"C:\\Users\\sunt\\Desktop\\MXC-Approval-Smoke-20261020-1150\"")]
+    [InlineData("mkdir \"C:\\Users\\sunt\\Desktop\\MXC-Approval-Smoke-20261020-1150\"")]
+    public void PowerShellRunStripsDeclarationBeforeMxcCommandLine(string command)
+    {
+        var desktop = Directory.CreateDirectory(Path.Combine(_root, "Desktop")).FullName;
+        var rawCommand = $"# [declare-access]rw:{desktop}[/declare-access]\n{command}";
+        var argv = new[]
+        {
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            rawCommand,
+        };
+        var capability = Capability(Policy([new ApprovedRoot(desktop, FolderAccess.ReadWrite)]));
+
+        var run = capability.ParseRun(Parse(JsonSerializer.Serialize(new
+        {
+            command = argv,
+            rawCommand,
+        })));
+
+        Assert.Equal(command, run.Argv[^1]);
+        Assert.Equal(command, run.RawCommand);
+        Assert.Equal(rawCommand, run.CommandPreview);
+        var config = BundledSystemCapability.BuildMxcConfig(
+            Policy([new ApprovedRoot(desktop, FolderAccess.ReadWrite)]),
+            run.Argv[0],
+            run.Argv[1..],
+            desktop,
+            Path.Combine(_root, "scratch"),
+            run.TimeoutMs);
+        Assert.DoesNotContain("declare-access", config.Process.CommandLine);
+        Assert.Equal(WindowsCommandLine.Join(run.Argv), config.Process.CommandLine);
+        Assert.Contains("\\\"C:\\Users\\sunt\\Desktop\\MXC-Approval-Smoke-20261020-1150\\\"", config.Process.CommandLine);
+    }
+
     [Fact]
     public void OmittedCwdUsesBoundScratchSemantic()
     {
@@ -719,8 +785,7 @@ public sealed class CwdPolicyTests : IDisposable
                 },
                 TestContext.Current.CancellationToken);
 
-            Assert.False(response.Ok);
-            Assert.Contains(expectedCode, response.Error);
+            AssertRejectedBeforeExecution(response, expectedCode);
             Assert.False(File.Exists(approvalsPath));
         }
         finally
@@ -1084,8 +1149,15 @@ public sealed class CwdPolicyTests : IDisposable
         Assert.True(server.IsConnected, response.Error);
         var approval = await observedRequest;
 
-        Assert.False(response.Ok);
-        Assert.Contains("approval-denied", response.Error);
+        Assert.True(response.Ok);
+        using var responsePayload = JsonDocument.Parse(JsonSerializer.Serialize(response.Payload));
+        Assert.False(responsePayload.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(
+            "approval-denied",
+            responsePayload.RootElement.GetProperty("errorCode").GetString());
+        Assert.Equal(
+            "rejectedBeforeExecution",
+            responsePayload.RootElement.GetProperty("executionState").GetString());
         Assert.Equal(1, approval.GetProperty("declaredAccess").GetArrayLength());
         Assert.Equal("rw", approval.GetProperty("declaredAccess")[0].GetProperty("access").GetString());
         Assert.Equal(desktop, approval.GetProperty("declaredAccess")[0].GetProperty("path").GetString(), ignoreCase: true);
@@ -1142,8 +1214,7 @@ public sealed class CwdPolicyTests : IDisposable
             TestContext.Current.CancellationToken);
         var approval = await observedRequest;
 
-        Assert.False(response.Ok);
-        Assert.Contains("approval-denied", response.Error);
+        AssertRejectedBeforeExecution(response, "approval-denied");
         Assert.Equal(command[0], approval.GetProperty("executable").GetString(), ignoreCase: true);
         Assert.Equal("main", approval.GetProperty("agent").GetString());
         Assert.False(File.Exists(approvalsPath));
@@ -1315,8 +1386,7 @@ public sealed class CwdPolicyTests : IDisposable
             },
             TestContext.Current.CancellationToken);
 
-        Assert.False(response.Ok);
-        Assert.Contains("approval-proof-required", response.Error);
+        AssertRejectedBeforeExecution(response, "approval-proof-required");
         Assert.False(server.IsConnected);
         Assert.False(File.Exists(approvalsPath));
     }
@@ -1392,8 +1462,7 @@ public sealed class CwdPolicyTests : IDisposable
             new NodeInvokeRequest { Command = "system.run", Args = args },
             TestContext.Current.CancellationToken);
 
-        Assert.False(response.Ok);
-        Assert.Contains("mxc-filesystem-isolation-insufficient", response.Error);
+        AssertRejectedBeforeExecution(response, "mxc-filesystem-isolation-insufficient");
         Assert.False(File.Exists(approvalsPath));
     }
 
@@ -1427,8 +1496,7 @@ public sealed class CwdPolicyTests : IDisposable
             },
             TestContext.Current.CancellationToken);
 
-        Assert.False(response.Ok);
-        Assert.Contains("declare-access-position-invalid", response.Error);
+        AssertRejectedBeforeExecution(response, "declare-access-position-invalid");
     }
 
     [Theory]
@@ -1492,6 +1560,20 @@ public sealed class CwdPolicyTests : IDisposable
     {
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
+    }
+
+    private static void AssertRejectedBeforeExecution(
+        NodeInvokeResponse response,
+        string expectedCode)
+    {
+        Assert.True(response.Ok, response.Error);
+        using var payload = JsonDocument.Parse(JsonSerializer.Serialize(response.Payload));
+        Assert.False(payload.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(expectedCode, payload.RootElement.GetProperty("errorCode").GetString());
+        Assert.Equal(
+            "rejectedBeforeExecution",
+            payload.RootElement.GetProperty("executionState").GetString());
+        Assert.Contains(expectedCode, payload.RootElement.GetProperty("error").GetString());
     }
 
     private static HostPolicy Policy(IReadOnlyList<ApprovedRoot> roots, IReadOnlyList<string>? denied = null)

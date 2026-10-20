@@ -69,7 +69,10 @@ internal sealed class BundledSystemCapability(
         }
         catch (HostPolicyException ex)
         {
-            return Error($"{ex.Code}: {LocalizePolicyError(ex, uiLocale)}");
+            var error = $"{ex.Code}: {LocalizePolicyError(ex, uiLocale)}";
+            return request.Command == "system.run"
+                ? RejectedBeforeExecution(error, ex.Code)
+                : Error(error);
         }
         catch (OperationCanceledException)
         {
@@ -271,7 +274,9 @@ internal sealed class BundledSystemCapability(
                     request.DeclaredAccess),
                 cancellationToken);
             if (decision is ApprovalDecision.Deny)
-                return Error("approval-denied: The operator denied this command.");
+                return RejectedBeforeExecution(
+                    "approval-denied: The operator denied this command.",
+                    "approval-denied");
             if (decision is ApprovalDecision.AllowAlways && policy.DurableApprovalsAllowed)
             {
                 DurableApprovalFile.Add(approvalsPath, approvedIdentity);
@@ -287,10 +292,14 @@ internal sealed class BundledSystemCapability(
             currentCwd.ApprovalBinding,
             declaredApprovalAccess);
         if (!DurableApprovalIdentity.Matches(approvedIdentity, currentIdentity))
-            return Error("approval-changed-before-launch: The executable, arguments, CWD, or declared access changed after approval.");
+            return RejectedBeforeExecution(
+                "approval-changed-before-launch: The executable, arguments, CWD, or declared access changed after approval.",
+                "approval-changed-before-launch");
         if (requireDurableRecheck && !DurableApprovalIdentity.Load(approvalsPath)
             .Any(entry => DurableApprovalIdentity.Matches(entry, currentIdentity)))
-            return Error("approval-changed-before-launch: The durable approval is no longer current.");
+            return RejectedBeforeExecution(
+                "approval-changed-before-launch: The durable approval is no longer current.",
+                "approval-changed-before-launch");
 
         var scratch = Path.Combine(Path.GetTempPath(), "microclaw-mxc-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
@@ -349,7 +358,7 @@ internal sealed class BundledSystemCapability(
                     ["TMPDIR"] = scratch,
                 });
             currentCwd = policy.RevalidateCwd(request.Cwd, cwd.ApprovalBinding);
-            activationLease.Revalidate(validatedActivation, request.Argv);
+            validatedActivation = activationLease.Revalidate(validatedActivation, request.Argv);
             currentIdentity = executableLease.Capture(
                 exactArgs,
                 currentCwd.ApprovalBinding,
@@ -385,17 +394,14 @@ internal sealed class BundledSystemCapability(
             if (validatedReadiness is not null)
                 Console.Error.WriteLine(
                     $"[readiness-probe] completed internal fixed probe kind={validatedReadiness.ProbeKind} exitCode={result.ExitCode} timedOut={result.TimedOut}");
-            return Success(new
-            {
-                stdout = result.Output ?? string.Empty,
-                stderr = result.Error ?? string.Empty,
-                exitCode = result.ExitCode,
-                timedOut = result.TimedOut,
-                durationMs = result.DurationMs,
-                containment = "mxc",
-                containmentStrength = policy.RequestedStrength,
-                effectiveTier = policy.EffectiveTier,
-            });
+            return Completed(
+                result.Output ?? string.Empty,
+                result.Error ?? string.Empty,
+                result.ExitCode,
+                result.TimedOut,
+                result.DurationMs,
+                policy.RequestedStrength,
+                policy.EffectiveTier);
         }
 
         finally
@@ -494,7 +500,7 @@ internal sealed class BundledSystemCapability(
         };
     }
 
-    private RunRequest ParseRun(JsonElement args)
+    internal RunRequest ParseRun(JsonElement args)
     {
         var hasArgv = args.TryGetProperty("argv", out var argvElement);
         if (!hasArgv) hasArgv = args.TryGetProperty("command", out argvElement);
@@ -639,6 +645,40 @@ internal sealed class BundledSystemCapability(
     }
 
     private static NodeInvokeResponse Success(object payload) => new() { Ok = true, Payload = payload };
+    internal static NodeInvokeResponse Completed(
+        string stdout,
+        string stderr,
+        int exitCode,
+        bool timedOut,
+        long durationMs,
+        string containmentStrength,
+        string effectiveTier) =>
+        Success(new
+        {
+            stdout,
+            stderr,
+            exitCode,
+            timedOut,
+            success = exitCode == 0 && !timedOut,
+            durationMs,
+            containment = "mxc",
+            containmentStrength,
+            effectiveTier,
+        });
+    private static NodeInvokeResponse RejectedBeforeExecution(string error, string code) =>
+        new()
+        {
+            Ok = true,
+            Payload = new
+            {
+                success = false,
+                exitCode = (int?)null,
+                timedOut = false,
+                error,
+                errorCode = code,
+                executionState = "rejectedBeforeExecution",
+            },
+        };
     private static NodeInvokeResponse Error(string error) => new() { Ok = false, Error = error };
     private static string LocalizePolicyError(HostPolicyException error, string locale)
     {
@@ -654,7 +694,7 @@ internal sealed class BundledSystemCapability(
             _ => error.Message,
         };
     }
-    private sealed record RunRequest(
+    internal sealed record RunRequest(
         string[] Argv,
         string? Cwd,
         int TimeoutMs,

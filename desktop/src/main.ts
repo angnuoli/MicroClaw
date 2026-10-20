@@ -31,7 +31,14 @@ import {
   sendToWindow,
   showAndFocusWindow,
   showStartupWindow,
+  shouldPreventWindowClose,
+  shouldQuitAfterAllWindowsClosed,
+  shouldRecoverWindow,
 } from "./window-lifecycle";
+import {
+  ElectronLifecycleDiagnostics,
+  summarizeLifecycleError,
+} from "./electron-lifecycle-diagnostics";
 import Store from "electron-store";
 import {
   verifySkillIntegrity,
@@ -77,6 +84,8 @@ import {
   DEFAULT_WINDOW_WIDTH,
   DEFAULT_WINDOW_HEIGHT,
   GATEWAY_READY_TIMEOUT_MS,
+  MXC_AGENT_DATABASE_READY_POLL_INTERVAL_MS,
+  MXC_AGENT_DATABASE_READY_TIMEOUT_MS,
   MXC_GATEWAY_RPC_PROBE_INITIAL_BACKOFF_MS,
   MXC_GATEWAY_RPC_PROBE_MAX_BACKOFF_MS,
   MXC_GATEWAY_RPC_PROBE_TIMEOUT_MS,
@@ -205,11 +214,17 @@ import {
 } from "./windows-node-mxc-hooks";
 import {
   commitWindowsNodeMxcFolderPolicyAtomically,
+  describeWindowsNodeMxcFolderTransactionError,
+  replaceWindowsNodeMxcFolderAcls as reconcileWindowsNodeMxcFolderAcls,
   runWindowsNodeMxcFolderPolicyTransaction,
   type WindowsNodeMxcFolderPolicy,
   type WindowsNodeMxcFolderTransactionPhase,
 } from "./windows-node-mxc-folder-transaction";
 import { runWindowsNodeMxcAutomaticTransition } from "./windows-node-mxc-auto-transition";
+import {
+  WindowsNodeMxcLifecycleOperationCoordinator,
+  type WindowsNodeMxcLifecycleOperationDescriptor,
+} from "./windows-node-mxc-lifecycle-operation";
 import {
   attestWindowsNodeMxcGatewaySnapshot,
   promoteWindowsNodeMxcPolicy,
@@ -219,6 +234,7 @@ import { startAfterGatewayRpcReady } from "./gateway-rpc-readiness";
 import { waitForGatewayHttpReadiness } from "./gateway-http-readiness";
 import {
   WindowsNodeMxcDurableApprovalStore,
+  canUseWindowsNodeMxcDurableApproval,
   consumeExactDurableApproval,
   durableApprovalIdentityFromGateway,
   type WindowsNodeMxcDurableApprovalInspection,
@@ -306,24 +322,6 @@ if (shouldDisableHardwareAcceleration(process.env, process.platform, os.release(
   app.commandLine.appendSwitch("disable-gpu");
 }
 
-// Handle EPIPE errors on stdout/stderr (happens when parent terminal closes)
-process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EPIPE") {
-    // Log to file instead of crashing — stdout/stderr pipe is broken
-    const logPath = path.join(
-      process.env.OPENCLAW_STATE_DIR || path.join(process.env.APPDATA || "", "openclaw"),
-      "epipe.log",
-    );
-    try {
-      fs.appendFileSync(logPath, `[${new Date().toISOString()}] EPIPE: ${err.stack}\n`);
-    } catch {
-      /* best-effort */
-    }
-    return;
-  }
-  throw err;
-});
-
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -378,6 +376,7 @@ const settingsStore = new Store<{
     draft: WindowsNodeMxcFolderPolicy;
     updatedAt: string;
     lastError: string | null;
+    failurePhase?: WindowsNodeMxcFolderTransactionPhase | null;
   };
   /** Privacy protection level. */
   privacyLevel: "basic" | "strict";
@@ -610,13 +609,28 @@ let windowsNodeMxcActivationInProgress = false;
 let windowsNodeMxcGatewayStartPolicyOverride: "active" | "locked" | null = null;
 let windowsNodeMxcSecurityTransitionInProgress = false;
 let windowsNodeMxcReadinessTransitionId: string | null = null;
+const windowsNodeMxcLifecycleOperations = new WindowsNodeMxcLifecycleOperationCoordinator();
 let windowsNodeMxcFolderPolicyMutationInProgress = false;
 let windowsNodeMxcLifecycleState: WindowsNodeMxcFolderTransactionPhase = "idle";
 let windowsNodeMxcLifecycleUpdatedAt = new Date().toISOString();
 let windowsNodeMxcLifecycleDetail: string | null = null;
+let explicitQuitRequested = false;
+let mainWindowRecovery: Promise<void> | null = null;
+const electronLifecycleDiagnostics = new ElectronLifecycleDiagnostics(
+  () => path.join(app.getPath("userData"), "diagnostics", "electron-lifecycle.jsonl"),
+  () => ({
+    lifecycleActive: isWindowsNodeMxcLifecycleCritical(),
+    lifecyclePhase: windowsNodeMxcLifecycleState,
+    windowRecoveryActive: mainWindowRecovery !== null,
+    gatewayPid: gatewayProcess?.pid ?? null,
+    gatewayGeneration: gatewayGenerationId || null,
+    explicitQuitRequested,
+  }),
+);
 let pendingWindowsNodeMxcGatewayApproval: {
   request: WindowsNodeMxcGatewayApproval;
   gatewayGeneration: string;
+  receivedAtUnixMs: number;
 } | null = null;
 let windowsNodeMxcFailClosedPromise: Promise<void> | null = null;
 let windowsNodeMxcStartupTiming: {
@@ -639,7 +653,51 @@ type WindowsNodeMxcFolderPolicyRecovery = {
   draft: WindowsNodeMxcFolderPolicy;
   updatedAt: string;
   lastError: string | null;
+  failurePhase?: WindowsNodeMxcFolderTransactionPhase | null;
 };
+
+function isWindowsNodeMxcLifecycleCritical(): boolean {
+  return (
+    windowsNodeMxcLifecycleOperations.active ||
+    windowsNodeMxcSecurityTransitionInProgress ||
+    windowsNodeMxcActivationInProgress
+  );
+}
+
+function lifecycleWindowState() {
+  return {
+    lifecycleActive: isWindowsNodeMxcLifecycleCritical(),
+    recoveryActive: mainWindowRecovery !== null,
+    explicitQuitRequested,
+  };
+}
+
+function requestExplicitQuit(source: string): void {
+  if (!explicitQuitRequested) {
+    explicitQuitRequested = true;
+    electronLifecycleDiagnostics.log("explicit-quit-requested", { source });
+  }
+  app.quit();
+}
+
+process.on("uncaughtException", (error: NodeJS.ErrnoException) => {
+  electronLifecycleDiagnostics.log("uncaught-exception", {
+    error: summarizeLifecycleError(error),
+  });
+  if (error.code === "EPIPE") return;
+  throw error;
+});
+
+process.on("unhandledRejection", (reason) => {
+  electronLifecycleDiagnostics.log("unhandled-rejection", {
+    error: summarizeLifecycleError(reason),
+  });
+  throw reason instanceof Error
+    ? reason
+    : new Error("Unhandled promise rejection", { cause: reason });
+});
+
+electronLifecycleDiagnostics.log("main-process-start", { processId: process.pid });
 
 async function tryConsumeWindowsNodeMxcCronResumeAcknowledgement(): Promise<boolean> {
   const fence = parseWindowsNodeMxcCronResumeFence(
@@ -706,11 +764,31 @@ function beginWindowsNodeMxcLifecycleOperation(): void {
   }
   windowsNodeMxcSecurityTransitionInProgress = true;
   windowsNodeMxcReadinessTransitionId = randomUUID();
+  electronLifecycleDiagnostics.log("mxc-lifecycle-start");
 }
 
 function endWindowsNodeMxcLifecycleOperation(): void {
   windowsNodeMxcSecurityTransitionInProgress = false;
   windowsNodeMxcReadinessTransitionId = null;
+  electronLifecycleDiagnostics.log("mxc-lifecycle-settled");
+}
+
+function windowsNodeMxcLifecycleOperationHooks() {
+  return {
+    beforeStart: beginWindowsNodeMxcLifecycleOperation,
+    afterSettled: endWindowsNodeMxcLifecycleOperation,
+  };
+}
+
+function runTrackedWindowsNodeMxcLifecycleOperation<T>(
+  descriptor: WindowsNodeMxcLifecycleOperationDescriptor,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return windowsNodeMxcLifecycleOperations.run(
+    descriptor,
+    operation,
+    windowsNodeMxcLifecycleOperationHooks(),
+  );
 }
 
 async function withWindowsNodeMxcApprovalResolution<T>(operation: () => Promise<T>): Promise<T> {
@@ -744,6 +822,10 @@ function setWindowsNodeMxcLifecycleState(
   windowsNodeMxcLifecycleState = state;
   windowsNodeMxcLifecycleDetail = detail;
   windowsNodeMxcLifecycleUpdatedAt = new Date().toISOString();
+  electronLifecycleDiagnostics.log("mxc-lifecycle-phase", {
+    phase: state,
+    detail: detail ? summarizeLifecycleError(detail) : null,
+  });
   sendToWindow(mainWindow, "windows-node-mxc:lifecycle-state", {
     phase: state,
     detail,
@@ -1746,10 +1828,9 @@ async function handleWindowsNodeMxcGatewayApproval(
   const identity = proofContext
     ? durableApprovalIdentityFromGateway(approval, proofContext.policyFingerprint)
     : null;
-  const durable =
-    getWindowsNodeMxcRequestedMode() === "full" && identity
-      ? getWindowsNodeMxcDurableApprovalStore().findExact(identity)
-      : null;
+  const durable = canUseWindowsNodeMxcDurableApproval(getWindowsNodeMxcRequestedMode(), identity)
+    ? getWindowsNodeMxcDurableApprovalStore().findExact(identity)
+    : null;
   if (durable) {
     try {
       const consumed = await withWindowsNodeMxcApprovalResolution(async () => {
@@ -1809,19 +1890,16 @@ async function handleWindowsNodeMxcGatewayApproval(
     }
     return;
   }
-  const rendererApproval =
-    getWindowsNodeMxcRequestedMode() === "limited-dacl"
-      ? {
-          ...approval,
-          allowedDecisions: approval.allowedDecisions.filter(
-            (decision) => decision !== "allow-always",
-          ),
-        }
-      : approval;
+  const rendererApproval = approval;
+  const receivedAtUnixMs = Date.now();
   pendingWindowsNodeMxcGatewayApproval = {
     request: rendererApproval,
     gatewayGeneration: approvalGeneration,
+    receivedAtUnixMs,
   };
+  console.info(
+    `[windows-node-mxc-approval-timing] stage=prompt-received layer=gateway unixMs=${receivedAtUnixMs} allowedDecisions=${rendererApproval.allowedDecisions.join(",")}`,
+  );
   sendToWindow(mainWindow, "windows-node-mxc:approval-request", {
     ...rendererApproval,
     commandText: rendererApproval.command,
@@ -1910,13 +1988,14 @@ async function resolvePendingWindowsNodeMxcGatewayApproval(
   if (decision === "allow-always" && !allowDurable) {
     throw new Error("Remote approvals are one-use only");
   }
-  if (decision === "allow-always" && getWindowsNodeMxcRequestedMode() === "limited-dacl") {
-    throw new Error("Durable command approvals are disabled under Limited filesystem containment");
-  }
   const gatewayApproval = pendingWindowsNodeMxcGatewayApproval;
   if (gatewayApproval?.request.id !== requestId) {
     throw new Error("The Gateway approval is no longer pending");
   }
+  const decisionAtUnixMs = Date.now();
+  console.info(
+    `[windows-node-mxc-approval-timing] stage=operator-decision layer=gateway unixMs=${decisionAtUnixMs} promptToDecisionMs=${Math.max(0, decisionAtUnixMs - gatewayApproval.receivedAtUnixMs)} decision=${decision}`,
+  );
   await withWindowsNodeMxcApprovalResolution(async () => {
     const approvalGeneration = gatewayApproval.gatewayGeneration;
     const proofContext = windowsNodeMxcApprovalProofContext;
@@ -2256,18 +2335,21 @@ async function runAutomaticWindowsNodeMxcReadiness(): Promise<WindowsNodeMxcRunt
       if (!gateway || !gatewayProcessAtPromotion) {
         throw new Error("Managed Gateway is unavailable for MXC policy promotion");
       }
+      const isCurrent = () =>
+        gwClient === gateway &&
+        gateway.connected &&
+        gatewayProcess === gatewayProcessAtPromotion &&
+        isManagedGatewayProcessAlive();
       const promoted = await promoteWindowsNodeMxcPolicy({
         gateway,
         nodeId,
         backups: settingsStore.get("windowsNodeMxcToolBackups"),
         expectedGeneration: generation,
         currentGeneration: () => gatewayGenerationId,
-        isCurrent: () =>
-          gwClient === gateway &&
-          gateway.connected &&
-          gatewayProcess === gatewayProcessAtPromotion &&
-          isManagedGatewayProcessAlive(),
+        isCurrent,
         requestTimeoutMs: MXC_GATEWAY_RPC_PROBE_TIMEOUT_MS,
+        agentReadinessTimeoutMs: MXC_AGENT_DATABASE_READY_TIMEOUT_MS,
+        agentReadinessPollIntervalMs: MXC_AGENT_DATABASE_READY_POLL_INTERVAL_MS,
       });
       settingsStore.set("windowsNodeMxcToolBackups", promoted.backups);
       activeGeneration = generation;
@@ -2320,12 +2402,9 @@ async function startApplicationServices(): Promise<void> {
     return;
   }
 
-  beginWindowsNodeMxcLifecycleOperation();
-  try {
-    await runAutomaticWindowsNodeMxcReadiness();
-  } finally {
-    endWindowsNodeMxcLifecycleOperation();
-  }
+  await runTrackedWindowsNodeMxcLifecycleOperation({ kind: "startup" }, () =>
+    runAutomaticWindowsNodeMxcReadiness(),
+  );
   notifyRendererApplicationReady();
 }
 
@@ -3461,7 +3540,110 @@ function createMainWindow(): BrowserWindow {
     return { action: "deny" };
   });
 
+  win.on("close", (event) => {
+    const prevented = shouldPreventWindowClose(lifecycleWindowState());
+    electronLifecycleDiagnostics.log("window-close", {
+      windowId: win.id,
+      prevented,
+    });
+    if (prevented) {
+      event.preventDefault();
+      showAndFocusWindow(win);
+    }
+  });
+  win.on("closed", () => {
+    electronLifecycleDiagnostics.log("window-closed", { windowId: win.id });
+    if (mainWindow === win) mainWindow = null;
+    scheduleMainWindowRecovery("window-closed");
+  });
+  win.on("unresponsive", () => {
+    electronLifecycleDiagnostics.log("window-unresponsive", { windowId: win.id });
+  });
+  win.on("responsive", () => {
+    electronLifecycleDiagnostics.log("window-responsive", { windowId: win.id });
+  });
+  win.webContents.on("render-process-gone", (_event, details) => {
+    electronLifecycleDiagnostics.log("render-process-gone", {
+      windowId: win.id,
+      reason: details.reason,
+      exitCode: details.exitCode,
+    });
+    scheduleMainWindowRecovery(`render-process-gone:${details.reason}`, win);
+  });
+
   return win;
+}
+
+async function loadMainWindowRenderer(win: BrowserWindow): Promise<void> {
+  if (isDev) {
+    for (let attempt = 0; attempt < 120; attempt++) {
+      try {
+        await win.loadURL(VITE_DEV_URL);
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+    await win.loadURL(VITE_DEV_URL);
+    return;
+  }
+
+  const indexPath = path.join(__dirname, "../renderer/dist/index.html");
+  try {
+    await win.loadFile(indexPath);
+  } catch (error) {
+    electronLifecycleDiagnostics.log("renderer-load-retry", {
+      error: summarizeLifecycleError(error),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await win.loadFile(indexPath);
+  }
+}
+
+function scheduleMainWindowRecovery(
+  reason: string,
+  failedWindow?: BrowserWindow,
+  force = false,
+): void {
+  if ((!force && !shouldRecoverWindow(lifecycleWindowState())) || mainWindowRecovery) return;
+  electronLifecycleDiagnostics.log("window-recovery-scheduled", { reason });
+  mainWindowRecovery = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (explicitQuitRequested) return;
+    if (failedWindow && mainWindow === failedWindow) {
+      if (!failedWindow.isDestroyed()) failedWindow.destroy();
+      mainWindow = null;
+    }
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      showAndFocusWindow(mainWindow);
+      return;
+    }
+    const replacement = createMainWindow();
+    mainWindow = replacement;
+    await loadMainWindowRenderer(replacement);
+    showAndFocusWindow(replacement);
+    electronLifecycleDiagnostics.log("window-recovery-complete", {
+      reason,
+      windowId: replacement.id,
+    });
+  })()
+    .catch((error) => {
+      electronLifecycleDiagnostics.log("window-recovery-failed", {
+        reason,
+        error: summarizeLifecycleError(error),
+      });
+    })
+    .finally(() => {
+      mainWindowRecovery = null;
+    });
+}
+
+function showOrRecoverMainWindow(reason: string): void {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+    scheduleMainWindowRecovery(reason, mainWindow ?? undefined, true);
+    return;
+  }
+  showAndFocusWindow(mainWindow);
 }
 
 // ---------------------------------------------------------------------------
@@ -4748,6 +4930,10 @@ async function startGatewayInner(startupRetriesRemaining = 1): Promise<void> {
 
     gatewayProcess = child;
     gatewayGenerationId = nextGatewayGenerationId;
+    electronLifecycleDiagnostics.log("gateway-spawned", {
+      gatewayPid: child.pid ?? null,
+      policy: windowsNodeMxcGatewayStartPolicyOverride ?? "standard",
+    });
     gatewayHttpReadyGeneration = null;
     windowsNodeMxcApprovalProofContext = nextApprovalProofContext;
     revokeWindowsNodeMxcWeixinIngress(windowsNodeMxcWeixinContext);
@@ -4787,6 +4973,10 @@ async function startGatewayInner(startupRetriesRemaining = 1): Promise<void> {
     });
 
     child.on("error", (err) => {
+      electronLifecycleDiagnostics.log("gateway-spawn-error", {
+        gatewayPid: child.pid ?? null,
+        error: summarizeLifecycleError(err),
+      });
       console.error("Gateway spawn error:", err);
       safeSendLog("gateway:log", `[error] Gateway spawn failed: ${err.message}`);
       safeSendLog("gateway:log", `[info] node=${nodePath} entry=${entryPath}`);
@@ -4804,6 +4994,11 @@ async function startGatewayInner(startupRetriesRemaining = 1): Promise<void> {
     });
 
     child.on("exit", (code, signal) => {
+      electronLifecycleDiagnostics.log("gateway-exit", {
+        gatewayPid: child.pid ?? null,
+        exitCode: code,
+        signal,
+      });
       console.log(`[gateway] exited: code=${code} signal=${signal}`);
       safeSendLog("gateway:log", `Gateway exited: code=${code} signal=${signal}`);
       if (gatewayProcess === child) {
@@ -5320,6 +5515,12 @@ function connectGatewayWs(): void {
             effectiveTier: windowsNodeMxcCurrentEffectiveTier ?? "",
             ambientAccess: windowsNodeMxcCurrentAmbientAccess,
             approvalProof,
+            onDiagnostic: (
+              event: string,
+              details: Record<string, string | number | boolean | null>,
+            ) => {
+              electronLifecycleDiagnostics.log(`bundled-node-${event}`, details);
+            },
             onApproval: (approval: BundledApprovalRequest | null) => {
               if (
                 !isCurrentBundledWindowsNodeApprovalCallback({
@@ -5333,6 +5534,11 @@ function connectGatewayWs(): void {
                 })
               ) {
                 return;
+              }
+              if (approval) {
+                console.info(
+                  `[windows-node-mxc-approval-timing] stage=prompt-received layer=node unixMs=${Date.now()} allowedDecisions=deny,allow-once`,
+                );
               }
               sendToWindow(
                 mainWindow,
@@ -6506,12 +6712,18 @@ function registerIpcHandlers(): void {
   ipcMain.handle("chat:delete-session", async (_event, params: { sessionKey: string }) => {
     if (!gwClient?.connected) throw new Error("Gateway not connected");
     sessionModelService.assertIdle();
+    await withWindowsNodeMxcDurableApprovalLock(() =>
+      getWindowsNodeMxcDurableApprovalStore().revokeSession(params.sessionKey),
+    );
     await gwClient.deleteSession(params.sessionKey);
   });
 
   ipcMain.handle("chat:clear-history", async () => {
     if (!gwClient?.connected) throw new Error("Gateway not connected");
     sessionModelService.assertIdle();
+    await withWindowsNodeMxcDurableApprovalLock(() =>
+      getWindowsNodeMxcDurableApprovalStore().revokeAll(),
+    );
     return await gwClient.clearAllHistory();
   });
 
@@ -7474,25 +7686,29 @@ function registerIpcHandlers(): void {
         nodeId?: string;
       },
     ) => {
-      localModelService.assertIdle();
-      sessionModelService.assertIdle();
-      beginWindowsNodeMxcLifecycleOperation();
+      const requestedMode =
+        params?.requestedMode ??
+        (params?.enabled === true ? "full" : params?.enabled === false ? "off" : null);
+      if (requestedMode !== "off" && requestedMode !== "full" && requestedMode !== "limited-dacl") {
+        throw new Error("A valid MXC containment mode is required");
+      }
+      const lifecycleOperation =
+        windowsNodeMxcLifecycleOperations.acquire<WindowsNodeMxcRuntimeStatus>(
+          { kind: "set-enabled", requestedMode },
+          windowsNodeMxcLifecycleOperationHooks(),
+        );
+      if (lifecycleOperation.joined) return lifecycleOperation.promise;
       let transitionSucceeded = false;
       let automaticReadinessStarted = false;
       let transitionMutationStarted = false;
       let cronSuspendedBeforePreflight = false;
       let standardRuntimeRecovered = false;
+      let lifecycleError: unknown = new Error(
+        "Windows Node + MXC lifecycle operation ended without a result",
+      );
       try {
-        const requestedMode =
-          params?.requestedMode ??
-          (params?.enabled === true ? "full" : params?.enabled === false ? "off" : null);
-        if (
-          requestedMode !== "off" &&
-          requestedMode !== "full" &&
-          requestedMode !== "limited-dacl"
-        ) {
-          throw new Error("A valid MXC containment mode is required");
-        }
+        localModelService.assertIdle();
+        sessionModelService.assertIdle();
         const enabled = requestedMode !== "off";
         const currentSelection = getWindowsNodeMxcSelection();
         const nextSelection = createWindowsNodeMxcSelection(
@@ -7578,6 +7794,7 @@ function registerIpcHandlers(): void {
           automaticReadinessStarted = true;
           const status = await runAutomaticWindowsNodeMxcReadiness();
           transitionSucceeded = true;
+          lifecycleOperation.succeed(status);
           return status;
         } else {
           stopBundledWindowsNodeHost();
@@ -7632,9 +7849,12 @@ function registerIpcHandlers(): void {
           await waitForWindowsNodeMxcCronResumeAcknowledgement();
           setWindowsNodeMxcLifecycleState("idle");
           transitionSucceeded = true;
-          return getWindowsNodeMxcStatus();
+          const status = await getWindowsNodeMxcStatus();
+          lifecycleOperation.succeed(status);
+          return status;
         }
       } catch (error) {
+        lifecycleError = error;
         const detail = error instanceof Error ? error.message : String(error);
         if (isWindowsNodeMxcDesired()) {
           setWindowsNodeMxcLifecycleState("locked", detail);
@@ -7663,11 +7883,13 @@ function registerIpcHandlers(): void {
                 `MXC preflight failed and the standard Gateway could not be restored: ${recoveryDetail}`,
               );
               setGatewayStatus("failed");
-              throw new AggregateError(
+              const aggregateError = new AggregateError(
                 [error, recoveryError],
                 `MXC preflight failed and the standard Gateway could not be restored: ${recoveryDetail}`,
                 { cause: recoveryError },
               );
+              lifecycleError = aggregateError;
+              throw aggregateError;
             }
           } else if (transitionMutationStarted) {
             try {
@@ -7681,7 +7903,7 @@ function registerIpcHandlers(): void {
         }
         throw error;
       } finally {
-        endWindowsNodeMxcLifecycleOperation();
+        if (!lifecycleOperation.settled) lifecycleOperation.fail(lifecycleError);
         if (transitionSucceeded || standardRuntimeRecovered) notifyRendererApplicationReady();
       }
     },
@@ -7708,14 +7930,6 @@ function registerIpcHandlers(): void {
         throw new Error("Invalid Windows node approval decision");
       }
       const normalizedDecision = decision as WindowsNodeMxcApprovalDecision;
-      if (
-        normalizedDecision === "allow-always" &&
-        getWindowsNodeMxcRequestedMode() === "limited-dacl"
-      ) {
-        throw new Error(
-          "Durable command approvals are disabled under Limited filesystem containment",
-        );
-      }
       const gatewayApproval = pendingWindowsNodeMxcGatewayApproval;
       if (gatewayApproval?.request.id === requestId) {
         await resolvePendingWindowsNodeMxcGatewayApproval(requestId, normalizedDecision, true);
@@ -8145,40 +8359,64 @@ function registerIpcHandlers(): void {
     next: WindowsNodeMxcFolderPolicy,
   ) => {
     if (!toolSandbox) throw new Error("The AppContainer ACL manager is unavailable");
-    const previousAccess = new Map([
-      ...previous.ro.map((dir) => [normalizeDirPath(dir).toLowerCase(), "ro"] as const),
-      ...previous.rw.map((dir) => [normalizeDirPath(dir).toLowerCase(), "rw"] as const),
-    ]);
-    const nextAccess = new Map([
-      ...next.ro.map((dir) => [normalizeDirPath(dir).toLowerCase(), "ro"] as const),
-      ...next.rw.map((dir) => [normalizeDirPath(dir).toLowerCase(), "rw"] as const),
-    ]);
-    for (const dir of [...previous.rw, ...previous.ro]) {
-      const key = normalizeDirPath(dir).toLowerCase();
-      if (nextAccess.get(key) === previousAccess.get(key)) continue;
-      const launcherPath = toolSandbox.getStatus().launcherPath;
-      if (launcherPath) await unshieldIfNeeded(launcherPath, "MicroClaw", dir);
-      if (!(await toolSandbox.revokeDirAsync(dir))) {
-        throw new Error(
-          `Windows could not revoke the previous ACL for ${dir}. No elevation was attempted; the MXC route remains locked.`,
-        );
-      }
-    }
-    const ordered = [
-      ...next.ro.map((dir) => ({ dir, access: "r" as const })),
-      ...next.rw.map((dir) => ({ dir, access: "rw" as const })),
-    ].sort((left, right) => left.dir.length - right.dir.length);
-    for (const entry of ordered) {
-      if (likelyNeedsElevation(entry.dir)) {
-        throw new Error(
-          `The folder ${entry.dir} requires elevated ACL preparation. MicroClaw did not request elevation; choose a user-owned folder or prepare it explicitly.`,
-        );
-      }
-      const granted = await toolSandbox.grantDirAsync(entry.dir, entry.access, true);
-      if (!granted || !(await verifyAclPropagation(entry.dir, entry.access))) {
-        throw new Error(`Windows could not apply and verify the MXC ACL for ${entry.dir}`);
-      }
-    }
+    await reconcileWindowsNodeMxcFolderAcls(previous, next, {
+      normalizePath: (dir) => normalizeDirPath(dir).toLowerCase(),
+      grant: async (dir, access) => {
+        if (likelyNeedsElevation(dir)) {
+          return {
+            ok: false,
+            timedOut: false,
+            exitCode: null,
+            signal: null,
+            stderr: "",
+            errorMessage:
+              "Folder requires elevated ACL preparation; elevation is not permitted during MXC policy apply",
+            durationMs: 0,
+          };
+        }
+        return toolSandbox!.grantDirAsyncDetailed(dir, access, true);
+      },
+      revoke: async (dir) => {
+        const launcherPath = toolSandbox!.getStatus().launcherPath;
+        if (launcherPath) {
+          await unshieldIfNeeded(launcherPath, "MicroClaw", dir);
+        }
+        return toolSandbox!.revokeDirAsyncDetailed(dir);
+      },
+      verifyGrant: async (dir, access) => {
+        const acl = await toolSandbox!.checkAcl(dir, access, true);
+        const rootSatisfied =
+          acl?.exists === true && acl.hasExplicitProfileAccess === true && acl.sufficient === true;
+        const protectedChildrenSatisfied = acl?.protectedChildrenSufficient === true;
+        const effective =
+          rootSatisfied && protectedChildrenSatisfied
+            ? await verifyAclFromAppContainer(dir)
+            : false;
+        return {
+          satisfied: rootSatisfied && protectedChildrenSatisfied && effective,
+          detail:
+            `rootSufficient=${rootSatisfied}; ` +
+            `protectedChildrenSufficient=${protectedChildrenSatisfied}; ` +
+            `protectedChildrenChecked=${String(acl?.protectedChildrenChecked ?? "unknown")}; ` +
+            `protectedChildrenErrors=${String(acl?.protectedChildrenErrors ?? "unknown")}; ` +
+            `appContainerAccess=${effective}`,
+        };
+      },
+      verifyRevoked: async (dir) => {
+        const acl = await toolSandbox!.checkAcl(dir, "r", true);
+        const pathAbsent = acl?.exists === false;
+        const rootExplicitClear = pathAbsent || acl?.hasExplicitProfileAccess === false;
+        const protectedChildrenClear = pathAbsent || acl?.protectedChildrenClear === true;
+        return {
+          satisfied: rootExplicitClear && protectedChildrenClear,
+          detail:
+            `pathAbsent=${pathAbsent}; rootExplicitClear=${rootExplicitClear}; ` +
+            `protectedChildrenClear=${protectedChildrenClear}; ` +
+            `protectedChildrenChecked=${String(acl?.protectedChildrenChecked ?? "unknown")}; ` +
+            `protectedChildrenErrors=${String(acl?.protectedChildrenErrors ?? "unknown")}`,
+        };
+      },
+    });
   };
 
   const persistWindowsNodeMxcFolderPolicy = (
@@ -8210,6 +8448,7 @@ function registerIpcHandlers(): void {
         draft: { rw: [...next.rw], ro: [...next.ro] },
         updatedAt: new Date().toISOString(),
         lastError,
+        failurePhase: null,
       },
     };
     if (toolSandbox) {
@@ -8284,7 +8523,12 @@ function registerIpcHandlers(): void {
       if (!isWindowsNodeMxcDesired()) {
         throw new Error("Apply and reactivate requires Windows Node + MXC mode");
       }
-      beginWindowsNodeMxcLifecycleOperation();
+      const lifecycleOperation =
+        windowsNodeMxcLifecycleOperations.acquire<WindowsNodeMxcRuntimeStatus>(
+          { kind: "apply-folder-policy" },
+          windowsNodeMxcLifecycleOperationHooks(),
+        );
+      if (lifecycleOperation.joined) return lifecycleOperation.promise;
       try {
         windowsNodeMxcActivationInProgress = true;
         const previous = currentSandboxUserDirs();
@@ -8296,6 +8540,7 @@ function registerIpcHandlers(): void {
           },
           updatedAt: new Date().toISOString(),
           lastError: null,
+          failurePhase: null,
         };
         settingsStore.set("windowsNodeMxcFolderPolicyRecovery", recovery);
         await runWindowsNodeMxcFolderPolicyTransaction(draft, previous, {
@@ -8446,6 +8691,11 @@ function registerIpcHandlers(): void {
             sendToWindow(mainWindow, "gateway:ws-connected", gwClient?.mainSessionKey || null);
           },
           lockAfterFailure: async (error, context) => {
+            const primaryErrorDetail = describeWindowsNodeMxcFolderTransactionError(error);
+            setWindowsNodeMxcLifecycleState(
+              "locked",
+              `${context.failurePhase}: ${primaryErrorDetail}`,
+            );
             closeWindowsNodeMxcIngress();
             windowsNodeMxcActivationInProgress = true;
             bundledWindowsNodeHost.revokeActivationLease();
@@ -8502,7 +8752,8 @@ function registerIpcHandlers(): void {
                 previous: context.previous,
                 draft: context.applied ?? context.draft,
                 updatedAt: new Date().toISOString(),
-                lastError: error instanceof Error ? error.message : String(error),
+                lastError: primaryErrorDetail,
+                failurePhase: context.failurePhase,
               });
             } catch (recoveryError) {
               recoveryErrors.push(recoveryError);
@@ -8536,17 +8787,45 @@ function registerIpcHandlers(): void {
             }
             windowsNodeMxcActivationInProgress = false;
             if (recoveryErrors.length > 0) {
-              throw new AggregateError(
-                recoveryErrors,
+              const recoveryFailure = new AggregateError(
+                [error, ...recoveryErrors],
                 "MXC folder policy failed and locked recovery was incomplete",
               );
+              const recoveryFailureDetail =
+                describeWindowsNodeMxcFolderTransactionError(recoveryFailure);
+              setWindowsNodeMxcLifecycleState(
+                "locked",
+                `${context.failurePhase}: ${recoveryFailureDetail}`,
+              );
+              try {
+                settingsStore.set("windowsNodeMxcFolderPolicyRecovery", {
+                  previous: context.previous,
+                  draft: context.applied ?? context.draft,
+                  updatedAt: new Date().toISOString(),
+                  lastError: recoveryFailureDetail,
+                  failurePhase: context.failurePhase,
+                });
+              } catch (persistError) {
+                console.error(
+                  "[windows-node-mxc] Could not persist complete folder recovery diagnostics:",
+                  persistError,
+                );
+              }
+              throw recoveryFailure;
             }
           },
         });
-        return await getWindowsNodeMxcStatus();
+        const status = await getWindowsNodeMxcStatus();
+        lifecycleOperation.succeed(status);
+        return status;
+      } catch (error) {
+        console.error(
+          `[windows-node-mxc] Folder policy apply failed during ${windowsNodeMxcLifecycleState}: ${describeWindowsNodeMxcFolderTransactionError(error)}`,
+        );
+        lifecycleOperation.fail(error);
+        throw error;
       } finally {
         windowsNodeMxcActivationInProgress = false;
-        endWindowsNodeMxcLifecycleOperation();
       }
     },
   );
@@ -9283,10 +9562,10 @@ function registerIpcHandlers(): void {
 // ---------------------------------------------------------------------------
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  app.quit();
+  requestExplicitQuit("single-instance-lock-denied");
 } else {
   app.on("second-instance", () => {
-    showAndFocusWindow(mainWindow);
+    showOrRecoverMainWindow("second-instance");
     // Ensure gateway is alive when user re-opens the app
     ensureGatewayConnected().catch((err) =>
       console.error("[second-instance] gateway reconnect failed:", err),
@@ -9327,7 +9606,7 @@ app.whenReady().then(async () => {
       inProgress ? "MicroClaw upgrade in progress" : "OpenClaw recovery failed",
       error instanceof Error ? error.message : String(error),
     );
-    app.quit();
+    requestExplicitQuit("startup-recovery-failed");
     return;
   }
 
@@ -9336,11 +9615,12 @@ app.whenReady().then(async () => {
   // Sync auto-start with OS
   app.setLoginItemSettings({ openAtLogin: settingsStore.get("autoStart") });
 
-  mainWindow = createMainWindow();
+  const initialWindow = createMainWindow();
+  mainWindow = initialWindow;
 
   const trayCallbacks = {
     onShowWindow: () => {
-      showAndFocusWindow(mainWindow);
+      showOrRecoverMainWindow("tray");
       // Ensure gateway is alive when user shows window from tray
       ensureGatewayConnected().catch((err) =>
         console.error("[tray-show] gateway reconnect failed:", err),
@@ -9351,6 +9631,7 @@ app.whenReady().then(async () => {
         console.error("[tray] Gateway restart failed:", error),
       );
     },
+    onQuit: () => requestExplicitQuit("tray"),
   };
   createTray(trayCallbacks, resolveSupportedLocale(settingsStore.get("language") ?? "en-US"));
 
@@ -9379,44 +9660,36 @@ app.whenReady().then(async () => {
     console.error("Failed to start application services:", err);
   });
 
-  // Load the Vue renderer UI.
-  if (isDev) {
-    // Poll until Vite dev server is ready (up to 60s).
-    const waitForVite = async () => {
-      for (let i = 0; i < 120; i++) {
-        try {
-          await mainWindow!.loadURL(VITE_DEV_URL);
-          return;
-        } catch {
-          await new Promise((r) => setTimeout(r, 500));
-        }
-      }
-      await mainWindow!.loadURL(VITE_DEV_URL);
-    };
-    await waitForVite();
-  } else {
-    const indexPath = path.join(__dirname, "../renderer/dist/index.html");
-    try {
-      await mainWindow.loadFile(indexPath);
-    } catch (err) {
-      console.error("Failed to load renderer, retrying:", err);
-      await new Promise((r) => setTimeout(r, 1000));
-      await mainWindow.loadFile(indexPath);
-    }
+  try {
+    await loadMainWindowRenderer(initialWindow);
+    logStartupTiming("renderer-loaded");
+  } catch (error) {
+    electronLifecycleDiagnostics.log("initial-renderer-load-failed", {
+      error: summarizeLifecycleError(error),
+    });
+    scheduleMainWindowRecovery("initial-renderer-load-failed", initialWindow, true);
   }
-  logStartupTiming("renderer-loaded");
 
   // Watch skill directories for mid-session changes
   startSkillFileWatcher();
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
+  const state = lifecycleWindowState();
+  const shouldQuit = shouldQuitAfterAllWindowsClosed(process.platform, state);
+  electronLifecycleDiagnostics.log("window-all-closed", { shouldQuit });
+  if (shouldQuit) {
+    requestExplicitQuit("window-all-closed");
+  } else {
+    scheduleMainWindowRecovery("window-all-closed");
   }
 });
 
 app.on("before-quit", () => {
+  if (!explicitQuitRequested) explicitQuitRequested = true;
+  electronLifecycleDiagnostics.log("before-quit");
+  closeWindowsNodeMxcIngress();
+  bundledWindowsNodeHost.revokeActivationLease();
   if (healthCheckInterval) clearInterval(healthCheckInterval);
   // Clean up skill file watchers
   for (const w of skillWatchers) {
@@ -9435,8 +9708,26 @@ app.on("before-quit", () => {
   stopGatewayProcess();
 });
 
+app.on("will-quit", () => {
+  electronLifecycleDiagnostics.log("will-quit");
+});
+
+app.on("quit", (_event, exitCode) => {
+  electronLifecycleDiagnostics.log("quit", { exitCode });
+});
+
+app.on("child-process-gone", (_event, details) => {
+  electronLifecycleDiagnostics.log("child-process-gone", {
+    processType: details.type,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    serviceName: details.serviceName ?? null,
+    name: details.name ?? null,
+  });
+});
+
 app.on("activate", () => {
-  showAndFocusWindow(mainWindow);
+  showOrRecoverMainWindow("app-activate");
   ensureGatewayConnected().catch((err) =>
     console.error("[activate] gateway reconnect failed:", err),
   );
