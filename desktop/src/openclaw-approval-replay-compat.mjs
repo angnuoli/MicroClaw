@@ -7,49 +7,49 @@ import process from "node:process";
 import { URL, fileURLToPath } from "node:url";
 import { isMainThread } from "node:worker_threads";
 
-const EXPECTED_VERSION = "2026.10.2";
-const EXPECTED_NODE_GATEWAY_MODULE = "nodes-CUbe_1MQ.mjs";
+const EXPECTED_VERSION = "2026.10.3";
+const EXPECTED_NODE_GATEWAY_MODULE = "nodes-Cl-Air2F.mjs";
 const EXPECTED_NODE_GATEWAY_SHA256 =
-  "3bc901af8f195d8b5d7ed41b2c50656f3da2ff160938d94d97d0c2fa8e42e676";
-const EXPECTED_NODE_INVOKE_PLUGIN_POLICY_MODULE = "node-invoke-plugin-policy-DLQRKKVA.mjs";
+  "b9a4037588bbf8405a6f9149cb85f7750ae58fa777bd1dc675fc8eb857d5a978";
+const EXPECTED_NODE_INVOKE_PLUGIN_POLICY_MODULE = "node-invoke-plugin-policy-GeGCY71G.mjs";
 const EXPECTED_NODE_INVOKE_PLUGIN_POLICY_SHA256 =
-  "6da4ee5c889ad2c236265b7f3290b4fd9c0ee1bcaa91bde0bd8f5a3c1ff532e9";
+  "29e2ad3edc93dc39ce03bffae28926f53bd7f432bbf417accc79302997603a27";
 const EXPECTED_NODE_REGISTRY_PRIVATE_MODULE = "node-registry-private-CyaYRwVd.mjs";
 const EXPECTED_NODE_REGISTRY_PRIVATE_SHA256 =
   "31510d11a6f80614e8c1d3d3b3c44eec42a61feb17cb05e051ad613ce6475228";
 const EXPECTED_SYSTEM_RUN_MODULE = "system-run-approval-plan-Cu-Ftdkp.mjs";
 const EXPECTED_SYSTEM_RUN_SHA256 =
   "c0df5badb2a8cc6adfdfb8bac48e5379e0825005e0dec827d01b2fb3e223820e";
-const EXPECTED_EXEC_APPROVAL_MODULE = "exec-approval-mGU7M4-K.mjs";
+const EXPECTED_EXEC_APPROVAL_MODULE = "exec-approval-BKqqOMdp.mjs";
 const EXPECTED_EXEC_APPROVAL_SHA256 =
-  "aacf6a38e1ea77a9ce02fc4f60069230eec6b9c0a2e7123d35032eb105253267";
-const EXPECTED_BASH_TOOLS_MODULE = "bash-tools-Bl8Bd3CR.mjs";
+  "8090cab45823ea945c7ee3852e5751c60c2743a0e5edd63424dbc8c0cd882c9b";
+const EXPECTED_BASH_TOOLS_MODULE = "bash-tools-DQS9-f8q.mjs";
 const EXPECTED_BASH_TOOLS_SHA256 =
-  "e5fd9fdfb6815da55188856b7215c406337f45d21b89fb87bb7a8a6ca48c0c90";
-const EXPECTED_WEB_TOOLS_MODULE = "openclaw-tools-Dxfbrtff.mjs";
+  "eee02a0bf16cbe6608b48e740cd4f2021b6f353b63eb324eb3ba224df77cfb2e";
+const EXPECTED_WEB_TOOLS_MODULE = "openclaw-tools-BA3mvtXt.mjs";
 const EXPECTED_WEB_TOOLS_SHA256 =
-  "181c5f9673480fbdacfa3ff88ae83686d8d1cb6402f583c3546d87b6e468d53e";
-const EXPECTED_CRON_SERVICE_MODULE = "service-31u04axN.mjs";
+  "cb69cd89f05f264a3258970c9b1e14c8fb5ba84966030841f0f5e116965ad270";
+const EXPECTED_CRON_SERVICE_MODULE = "service-B3JlUlHg.mjs";
 const EXPECTED_CRON_SERVICE_SHA256 =
-  "5f3fda2b466273f79606dbccb53e2952d3c33e198d32c8a0eed30f7be5cda3ab";
-const EXPECTED_CRON_HANDLERS_MODULE = "cron-D3Bd3ZFt.mjs";
+  "80b7e584751b1b260377c9e856d5b97c3d4540e525a5f29d7b7309ac8e1d9320";
+const EXPECTED_CRON_HANDLERS_MODULE = "cron-Bz6F4quM.mjs";
 const EXPECTED_CRON_HANDLERS_SHA256 =
-  "3dd84c2aebf7cfe326f1ae4d3f40e5c68e4c897a623d834c60a613888c1f6ea1";
-const EXPECTED_HOOKS_SERVER_MODULE = "server-start-DfGddYU-.mjs";
+  "da2ef23428fa4eea0ac27b2ba9c7cf2c6e92ec2979bef692ba76fc5f50d11f83";
+const EXPECTED_HOOKS_SERVER_MODULE = "server-start-CZZFIc7j.mjs";
 const EXPECTED_HOOKS_SERVER_SHA256 =
-  "86b9912a5458cd617e22dcdb24cc8ba757ea2206b298bf8831b22cd874e5efae";
-const EXPECTED_INTERNAL_HOOKS_MODULE = "internal-hooks-DfVqU7ax.mjs";
+  "a0450d72ae6d4e37014cd9e36bb5fa613fb660ea5e8e33f4dab6c0f80d0366b2";
+const EXPECTED_INTERNAL_HOOKS_MODULE = "internal-hooks-C3ju7znI.mjs";
 const EXPECTED_INTERNAL_HOOKS_SHA256 =
-  "3e0200cbe95b537ac5c4fc36509197b2d13700a72688e26839620248c6c967d0";
+  "6a16a588d98621cac5ede209e53ccda37e11e21d14e3291e538a09dc0356c471";
 const EXPECTED_CANVAS_EXTENSION_MODULE = "extensions/canvas/index.js";
 const EXPECTED_CANVAS_EXTENSION_SHA256 =
-  "81a8476cf4bdf208710f7be014aa2bb72321399d2b46f3d8101826223182b9df";
-const EXPECTED_CANVAS_TOOL_MODULE = "tool-CpRzQ0s7.mjs";
+  "fb82b88b91a8b10963541ac4d8cba58ee944540be8408652816f19ce7c3b316d";
+const EXPECTED_CANVAS_TOOL_MODULE = "tool-QdensQdF.mjs";
 const EXPECTED_CANVAS_TOOL_SHA256 =
-  "2e45e3320ec6f3e8eb6005b06b90a29f1e620541079cf2b0f14d4342be60056a";
-const EXPECTED_CANVAS_ELIGIBILITY_MODULE = "node-eligibility-UXb9xB0F.mjs";
+  "0330910945a2eebcad5a779097810606687d617ee72c823aa3718eda558e1fdd";
+const EXPECTED_CANVAS_ELIGIBILITY_MODULE = "node-eligibility-CYxKvUWR.mjs";
 const EXPECTED_CANVAS_ELIGIBILITY_SHA256 =
-  "4e80d6add8a2cd46f315e1698b65001fe837d1b16056a8255d34f546358c6431";
+  "db074a408f22f683aab4f22422c968d8e8cde9dfd8a47c5509320bdddcc00071";
 export const APPROVAL_PROOF_CONTRACT = "microclaw.windows-node-approval.v1";
 export const APPROVAL_PROOF_PLAN_CONTRACT = "microclaw.windows-node-approval-plan.v2";
 export const APPROVAL_PROOF_TTL_MS = 30_000;
@@ -72,9 +72,7 @@ export function classifyWindowsNodeMxcInvokeFailure(error) {
     (error instanceof Error ? error.message : normalizeString(error)) ??
     "node invoke failed";
   const nodeCommandDispatched =
-    typeof details?.nodeCommandDispatched === "boolean"
-      ? details.nodeCommandDispatched
-      : undefined;
+    typeof details?.nodeCommandDispatched === "boolean" ? details.nodeCommandDispatched : undefined;
   const requestSent =
     typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : undefined;
   if (
@@ -129,8 +127,7 @@ export function normalizeWindowsNodeSystemRunResponse(raw) {
     return (
       leftKeys.length === rightKeys.length &&
       leftKeys.every(
-        (key, index) =>
-          key === rightKeys[index] && jsonEqual(leftRecord[key], rightRecord[key]),
+        (key, index) => key === rightKeys[index] && jsonEqual(leftRecord[key], rightRecord[key]),
       )
     );
   };
@@ -223,10 +220,7 @@ export function describeWindowsNodeSystemRunResponseShape(raw) {
 }
 
 export function buildMicroclawWindowsNodeShellCommand(command, env = process.env) {
-  const windowsRoot = (env.SystemRoot ?? env.WINDIR ?? "C:\\Windows").replace(
-    /[\\/]+$/,
-    "",
-  );
+  const windowsRoot = (env.SystemRoot ?? env.WINDIR ?? "C:\\Windows").replace(/[\\/]+$/, "");
   return [
     `${windowsRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
     "-NoLogo",
