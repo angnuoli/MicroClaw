@@ -137,6 +137,12 @@ export default {
   "chat.disclaimer":
     "AI-generated content may be incorrect. AI is not a human and has no personality. MicroClaw is not responsible for any AI-generated content.",
   "chat.executionSteps": "Execution Steps",
+  "chat.activityWaitingApproval": "Waiting for approval",
+  "chat.activityRunningTool": "Running tool",
+  "chat.activityWorking": "Working",
+  "chat.activityConnectionUnknown": "Connection unavailable — activity unknown",
+  "chat.securityApproval": "Security approval",
+  "chat.approvalExpired": "Expired — no decision",
   "chat.thinking": "Thinking",
   "chat.plan.stepsUnit": " steps",
   "chat.plan.stepN": "Step {n}/{total}",
@@ -209,13 +215,23 @@ export default {
   "plugins.channelLoginDesc":
     "Scan the QR code to log in to WeChat. Once logged in, the AI assistant can receive and process WeChat messages.",
   "plugins.loginWeixin": "Log in to WeChat",
+  "plugins.replaceWeixin": "Replace WeChat account",
+  "plugins.replaceWeixinConfirm":
+    "A successful login will replace the current WeChat account and remove its local sync and authorization state. Canceling or a failed login keeps the current account.",
+  "plugins.loginStatus": "Status",
+  "plugins.loggedIn": "Logged in",
+  "plugins.notLoggedIn": "Not logged in",
+  "plugins.accountId": "Account ID",
+  "plugins.weixinUserId": "WeChat user ID",
+  "plugins.multipleAccountsInvalid":
+    "Multiple legacy accounts were detected. Log in again to repair the single-account invariant.",
   "plugins.waitingScan": "Waiting for scan...",
   "plugins.cancel": "Cancel",
   "plugins.loginSuccess": "WeChat login successful",
-  "plugins.viewWeixinMessages": "View WeChat Messages →",
+  "plugins.viewWeixinMessages": "View WeChat Messages",
   "plugins.gatewayRestart": "Gateway Restart",
   "plugins.gatewayRestartDesc":
-    "The gateway must be restarted after enabling the plugin or logging in.",
+    "Use only for troubleshooting. Successful WeChat login activates without replacing the Gateway.",
   "plugins.restartGateway": "Restart Gateway",
   "plugins.gatewayRestarted": "✓ Gateway restarted",
   "plugins.weixinEnabled":
@@ -303,52 +319,10 @@ export default {
     "Ask for confirmation before the agent reads files that match these patterns.",
   "settings.sensitiveFilePatterns": ".env, *_key*, *.pem, *.p12, *.pfx, id_rsa, credentials",
   "settings.security": "Security sandbox",
-  "settings.mxcPreviewTitle": "Microsoft MXC public preview experiment",
-  "settings.mxcPreviewWarning":
-    "MXC policies may be overly permissive. Microsoft states that no current profile is a production security boundary. Use this POC only for evaluation.",
-  "settings.mxcOverall": "Containment readiness",
-  "settings.mxcReady": "Ready",
-  "settings.mxcBlocked": "Blocked (fail closed)",
-  "settings.mxcPackage": "Pinned runtime",
-  "settings.mxcRuntimeHash": "wxc-exec SHA-256 (base64)",
-  "settings.mxcOsTier": "Windows isolation tier",
-  "settings.mxcPolicyReady": "Policy ready",
-  "settings.mxcWorkerReady": "Worker proof ready",
-  "settings.mxcHostPrep":
-    "This host selected AppContainer+DACL. Microsoft documents elevated `wxc-host-prep prepare-system-drive` and `prepare-null-device` (machine-wide metadata/null-device changes), but this POC cannot attest that preparation or collect folder-DACL consent, so it remains blocked. MSIX cannot chain host prep.",
-  "settings.mxcAgentPolicy": "Per-agent folder policy",
-  "settings.mxcAgent": "Agent",
-  "settings.mxcWorkspace": "Isolated workspace",
-  "settings.mxcDesired": "Desired policy",
-  "settings.mxcEffective": "Effective (proven) policy",
-  "settings.mxcNoEffective": "No effective folders until MXC reinitialization succeeds",
-  "settings.mxcRetry": "Retry / reinitialize",
-  "settings.mxcCleanup": "Clean temporary files",
-  "settings.mxcDocs": "Pinned documentation",
-  "settings.mxcRepo": "MXC v0.7.0 source",
-  "settings.mxcNoFallback":
-    "OpenClaw host file/runtime tools, elevated mode, browser, canvas, and code execution are denied. MXC tools never fall back to the host. Legacy AppContainer ACLs are not changed.",
-  "settings.yes": "Yes",
-  "settings.no": "No",
   "settings.windowsNodeMxc": "Experimental bundled Windows Node + MXC",
   "settings.windowsNodeMxcExperimental":
     "App-owned headless node and pinned official MXC 0.7 runtime (security framework #202)",
   "settings.experimental": "Experimental",
-  "settings.weixinRemoteApproval": "WeChat remote approval (Experimental)",
-  "settings.weixinRemoteApprovalRisk":
-    "Trusts normalized account, sender, direct-chat, message, and cursor metadata from the allowlisted openclaw-weixin plugin and Gateway as authentic. A compromised phone, WeChat session, plugin, or Gateway could authorize local command execution.",
-  "settings.weixinRemoteApprovalOwner": "Bound owner",
-  "settings.weixinRemoteApprovalUnbound": "Not bound",
-  "settings.weixinRemoteApprovalRequiresMxc":
-    "Enable Windows Node + MXC before enabling remote approval.",
-  "settings.weixinRemoteApprovalRequiresOwner":
-    "Exactly one authenticated WeChat account whose owner is in the explicit sender allowlist is required.",
-  "settings.weixinRemoteApprovalOnceOnly":
-    "Remote prompts are limited to exact predefined read-only Windows queries with no opaque operands. Free-form, unknown, or secret-bearing requests stay local-only, and raw command fields are not sent to WeChat. Replies approve only the currently listed request(s) once and never create durable approvals, folder grants, or future approval.",
-  "settings.weixinRemoteApprovalEnable": "Enable and bind locally",
-  "settings.weixinRemoteApprovalDisable": "Disable",
-  "settings.weixinRemoteApprovalRevoke": "Revoke owner binding",
-  "settings.weixinRemoteApprovalFailed": "Could not update WeChat remote approval",
   "settings.windowsNodeMxcModeFull": "Full containment",
   "settings.windowsNodeMxcFullBadge": "Hard boundary",
   "settings.windowsNodeMxcModeFullDesc":
@@ -839,6 +813,7 @@ export default {
   "gateway.mxcFailed": "MXC readiness failed. Execution remains safely locked.",
   "gateway.ready": "Ready",
   "gateway.starting": "Starting services…",
+  "gateway.restarting": "Reconnecting services…",
   "gateway.connecting": "Connecting…",
   "gateway.warming": "Preparing your workspace…",
   "gateway.timeout": "Service startup timed out. Please retry.",
@@ -1142,6 +1117,21 @@ export default {
   "perm.appDesc":
     "AI is trying to launch {app}. This app is not in the sandbox whitelist and needs to run outside the sandbox.",
   "perm.mxcDesc": "AI wants to run this command inside the MXC sandbox.",
+  "perm.phoneSending": "Sending this approval to WeChat; the original timeout still applies.",
+  "perm.phoneSent":
+    "WeChat notified: reply 1 to allow once or 3 to deny. 2 is available only if the phone prompt offers it. Replies affect the current delivered prompt; a delayed reply can affect a newer prompt.",
+  "plugins.weixinMutationLocked": "Turn off MXC first to change the WeChat channel or account.",
+  "plugins.weixinMutationUnknown":
+    "WeChat configuration is locked until its main-process MXC status can be verified.",
+  "perm.phoneCodeRequired":
+    "WeChat notified. Reply 1/2/3 with the request code shown on the phone; bare-reply freshness could not be verified.",
+  "perm.phoneLocalOnly":
+    "Phone approval unavailable ({reason}). Decide here; no remote permission was granted.",
+  "perm.phoneUnconfirmed": "Phone delivery is unconfirmed. Decide here; no automatic resend.",
+  "perm.mxcResolutionUnconfirmed":
+    "Permission decision could not be confirmed. No automatic retry; check the current request status.",
+  "perm.mxcDurableNotSaved":
+    "The current one-use decision was accepted, but its exact durable approval could not be saved.",
   "perm.mxcLimitedDesc": "AI wants to run this command with Limited filesystem containment.",
   "perm.mxcAccessLabel": "Declared folder use",
   "perm.mxcAdditionalAccessLabel": "Additional filesystem grants",
@@ -1160,6 +1150,8 @@ export default {
     "Additional folder grants are additive, not an exclusive allowlist. Conversation-scoped approval remembers only this exact executable, arguments, working directory, declared access, agent, and conversation.",
   "perm.mxcLimitedScopeOnce":
     "This approval authorizes this command once. Additional folder grants are additive, not an exclusive allowlist.",
+  "perm.mxcPowerShellScope":
+    "PowerShell uses logical $PWD MicroClawCwd:\\ with the physical working directory shown above. The exact initialization is included in this command; it grants no extra file access.",
   "perm.riskRead": "Low risk: the agent can view files in this folder.",
   "perm.riskWrite": "Medium risk: the agent can create or modify files in this folder.",
   "perm.riskCommandRO": "Medium risk: review the command before allowing folder access.",

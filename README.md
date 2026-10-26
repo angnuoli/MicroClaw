@@ -2,7 +2,7 @@
 
 [中文版](README.zh-CN.md)
 
-**MicroClaw** makes [OpenClaw](https://github.com/openclaw) instantly available on Windows through a familiar, low-friction install experience. This branch contains an experimental Microsoft MXC sandbox POC.
+**MicroClaw** makes [OpenClaw](https://github.com/openclaw) instantly available on Windows through a familiar, low-friction install experience. It packages the desktop client, local Gateway, managed runtime, preloaded skills, and permission-controlled sandbox into one product so users can get to real tasks quickly. You bring the LLM connection; MicroClaw brings the Windows app, local runtime, and trust boundary.
 
 > [!WARNING]
 > **AI & Security Notice**
@@ -19,7 +19,7 @@ MicroClaw is designed to remove the usual Windows setup friction around OpenClaw
 ### Instant Availability
 
 - **Familiar Windows install flow**: packaged installer with desktop shortcut, Start menu entry, and one-click uninstall
-- **One run sets up the runtime**: Git, managed Node.js, OpenClaw Gateway, the MicroClaw desktop app, managed skills, and the pinned MXC package
+- **One run sets up the runtime**: Git, managed Node.js, OpenClaw Gateway, the MicroClaw desktop app, managed skills, and AppContainer provisioning
 - **Ready after install**: launch the app immediately after setup instead of building a local OpenClaw environment by hand
 
 ### Ready-to-Use Experience
@@ -31,10 +31,9 @@ MicroClaw is designed to remove the usual Windows setup friction around OpenClaw
 
 ### Built-In Trust
 
-- **Native folder policy**: approved read-only/read-write folders are selected through the desktop's native picker
-- **Microsoft MXC experiment**: dedicated Node workers run through `@microsoft/mxc-sdk@0.7.0`
-- **One mandatory backend**: this branch does not offer the separately selectable Windows Node + MXC route or an AppContainer/host fallback. Dormant settings and consents are preserved, not used as execution authority.
-- **Fail closed**: OpenClaw host file/runtime, elevated, browser, canvas, and native code-execution tools are denied; MXC tools have no host fallback
+- **Transparent, permission-controlled actions**: file and tool access requests are surfaced to the user instead of being silently granted
+- **Sandboxed with Windows AppContainer**: tool execution runs inside an OS-enforced AppContainer boundary on supported systems
+- **Hooks plus sandbox, defense in depth**: hook-based prechecks improve UX while AppContainer ACL enforcement remains the actual security boundary
 - **Hard blocks for sensitive paths**: credential-heavy locations such as `.ssh` and cloud config folders are denied rather than merely warned about
 
 ---
@@ -89,7 +88,7 @@ graph TB
 | Gateway → LLM | HTTPS | Streaming API calls to Claude / OpenAI / Gemini |
 | Gateway → Skills | In-process | Agent loop invokes tool calls; results fed back to LLM |
 | WeChat Plugin → WeChat | HTTPS | Long-poll `getUpdates` + `sendMessage` |
-| MXC plugin → MXC worker | Native process containment | Hash-verified `wxc-exec` launches a secret-stripped Node worker |
+| Permission Manager → AppContainer | Win32 API | AppContainer security capabilities + Job Object resource limits |
 
 ---
 
@@ -98,7 +97,7 @@ graph TB
 | Component | Path | Stack | Description |
 |---|---|---|---|
 | **Desktop App** | `desktop/` | Electron 33 + TypeScript + Vue 3 + Element Plus | Chat UI, Gateway lifecycle management, system tray |
-| **MXC tool plugin** | `desktop/mxc-plugin/` | OpenClaw Plugin SDK + MXC 0.7.0 | Registers non-conflicting `mxc_*` tools and launches the contained worker |
+| **AppContainer Sandbox** | `appcontainer/` | .NET 9 + Node.js preload hooks | Windows AppContainer launcher + permission hooks for tool isolation |
 | **Installer** | `deploy.py` + `deployer/` | Python 3 + Tkinter | Wizard-style graphical installer (can be packaged as a single exe) |
 | **Skill Packs** | `skills/` | Markdown + JSON + Python/Node | Office, search, browser automation managed skills |
 | **WeChat Plugin** | `plugins/openclaw-weixin/` | TypeScript + OpenClaw Plugin SDK | WeChat channel integration |
@@ -128,7 +127,7 @@ The installer handles the Windows-side setup in a single run:
 - Node.js 26 via the official signed `.msi` (per-machine install to `%ProgramFiles%\nodejs\`, UAC-elevated; an existing supported system Node at that path is reused as-is; supported range: `>=24.16.0 <25 || >=26.1.0`, download fallback: `26.1.0`)
 - OpenClaw Gateway, pinned to **2026.10.5** on the default `stable` channel (`npm install -g openclaw@2026.10.5`)
 - Configures the npm registry mirror and V8 compile cache
-- Installs the MicroClaw desktop client, managed skills, and pinned MXC runtime; the WeChat plugin is not bundled or automatically installed
+- Installs the MicroClaw desktop client, managed skills, and Windows sandbox components; the WeChat plugin is not bundled or automatically installed
 - Adds Windows Defender exclusions, creates desktop shortcuts (including one-click Uninstall)
 
 After install, launch **MicroClaw** from the Start menu or the desktop shortcut. The desktop app auto-starts the Gateway.
@@ -201,7 +200,7 @@ When the pinned OpenClaw version is unchanged, a desktop update refreshes manage
 - Cloud and local connections are retained when changing models. Selection does not add automatic cloud fallbacks; any previously authored OpenClaw fallback or agent/session override still needs to be reviewed separately. Local inference does not make network-dependent skills offline.
 - Cloud setup remains accessible while a local wizard is unfinished. Only saving or switching a model asks to cancel conflicting local setup first; declining leaves it untouched. For local models, the only unconfigured catalog entries offered are the four pinned presets; existing saved connections are retained. Local connection management stays under advanced local settings.
 - The default installer pins OpenClaw to **2026.10.5**. The integration checks the Gateway's advertised setup methods and supports 2026.10.5 as well as the legacy 2026.10.2, 2026.10.3 and 2026.9.3+ (2026.9.x) hosts. Every provider installation uses an explicit official ClawHub package version: `@openclaw/llama-cpp-provider@2026.10.5` for a 2026.10.5 host, or the verified 2026.9.3 provider for legacy hosts. The built-in official catalog and search fallback follow the same pin; neither may request a floating latest release or silently fall back to one. Downloads, runtime prerequisites and GPU support remain subject to the official provider.
-- Actual configuration writes remain protected while a response is active or until conflicting setup has safely ended. Preparing a local model does not itself block existing chats; applying a model change still does. After a disconnection, resume the retained operation rather than starting it again. Cancellation can be refused while OpenClaw finishes a protected step.
+- Actual configuration writes remain protected in Windows Node + MXC mode, while a response is active, or until conflicting setup has safely ended. Preparing a local model does not itself block existing chats; applying a model change still does. After a disconnection, resume the retained operation rather than starting it again. Cancellation can be refused while OpenClaw finishes a protected step.
 
 **Windows compatibility:** MicroClaw includes the [upstream Windows file-open timestamp fix](https://github.com/openclaw/fs-safe/commit/6ae2e2e5086f2c48b813f78cb65fd787c9879a3f) for the exact `fs-safe@0.8.5` dependency bundled with the supported OpenClaw runtime. MicroClaw additionally handles deferred `ctime` changes after copying: only regular, single-link files with unchanged identity, size and modification time can be reconsidered, and their contents must match the SHA-256 captured during copying. Verification uses bounded buffers, rechecks the open handle and path, and checks the exact fingerprint again after mutation authorization before deletion. Genuine changes remain errors; hardlink aliases do not use this exception. A version- and SHA-256-pinned preload validates both move and cleanup modules and applies the changes in memory; installed OpenClaw files are not modified. Other dependency versions are left unchanged, and modified 0.8.5 source is rejected rather than patched speculatively. These checks run during file moves, not when opening model settings.
 
@@ -282,29 +281,13 @@ npm run lint:sarif    # outputs eslint-results.sarif
 
 ## Sandbox Isolation
 
-This branch pins [`@microsoft/mxc-sdk@0.7.0`](https://github.com/microsoft/mxc/tree/v0.7.0)
-(tag commit `34d7fe2b4b3226bd4d11dc4a32419b7ec198a88b`) and stable policy
-`0.7.0-alpha`. The packaged OpenClaw plugin exposes `mxc_read`, `mxc_write`,
-`mxc_edit`, and bounded `mxc_exec`. Each call launches a dedicated Node worker
-inside MXC with network/UI denied and a secret-stripped environment; descendants
-remain in the same containment. Chat is blocked unless package version, official
-`wxc-exec` hash, OS tier, policy, and worker proof all succeed.
+`appcontainer/` provides a Windows AppContainer-based sandbox for isolating tool execution:
 
-POC scope is intentionally narrow: file operations are UTF-8 and capped at 1 MiB,
-`mxc_edit` replaces one unique string, and `mxc_exec` is non-interactive with a
-30-second/1 MiB output limit. There is no background/process-control tool,
-`apply_patch`, unrestricted host fallback, or automatic host preparation.
+- **.NET launcher** (`AppContainerLauncher.exe`) runs child processes inside an AppContainer with restricted ACLs
+- **Node.js preload hooks** (`sandbox-preload.js`, `sandbox-fs-hooks.js`, …) intercept `fs.*` / `child_process.*` calls and prompt the user for permission
+- **Sensitive-path shield** hard-denies access to `~/.ssh`, `~/.azure`, and other credential directories — no override
 
-> [!WARNING]
-> MXC is a **public preview**. Policies may be overly permissive and no current
-> profile is a production security boundary. This POC sets
-> `fallback.allowDaclMutation=false`. If Settings reports that host preparation is
-> required, Microsoft documents elevated `wxc-host-prep prepare-system-drive`
-> (machine-wide metadata ACEs) and `wxc-host-prep prepare-null-device`. MSIX cannot
-> chain those steps. MicroClaw never invokes them, elevates, or mutates ACLs
-> automatically. This POC cannot attest preparation or collect consent for
-> temporary folder-DACL mutation, so it remains blocked on `appcontainer-dacl`;
-> legacy AppContainer ACLs are left unchanged.
+See [appcontainer/README.md](appcontainer/README.md) for details.
 
 ---
 
@@ -366,7 +349,7 @@ when their owning specialist agent is added:
 | **Skill Integrity Checks** | SHA-256 hashes + Ed25519 signatures — detects tampering of all skill files at startup |
 | **Device Authentication** | Each device generates an Ed25519 key pair; Gateway connections are signature-authenticated |
 | **Skill Allowlist** | `allowBundled` / `allowManaged` control the available skill scope |
-| **Sandbox Isolation** | Experimental MXC 0.7.0 worker with hash verification, network/UI denial, strict folder policy, and no host fallback |
+| **Sandbox Isolation** | OS-native AppContainer + Job Object isolation for file system, network, and resource limits |
 | **Local Gateway** | Binds to loopback only — does not accept remote connections |
 
 ---
@@ -389,7 +372,7 @@ This script sequentially:
 
 The CI and release workflows also build `desktop/release/MicroClawDesktop-<version>-x64.msix`
 with Electron Builder. The package includes the Electron app, the pinned OpenClaw
-runtime, Node.js, and MXC SDK/native resources. On first launch, the
+runtime, Node.js, and the AppContainer launcher resources. On first launch, the
 read-only bundled runtime archive is expanded under Electron's per-user
 `userData` directory; configuration and other writable state remain in per-user
 application data.
@@ -421,6 +404,8 @@ download-update path.
 
 - Node.js 26.1+ (recommended), or 24.16+ on the 24.x line
 - Python 3.10+ — install build deps with `pip install -r requirements.txt` (includes PyInstaller)
+- .NET 9 SDK (for the AppContainer launcher)
+- .NET 10 SDK (for the bundled Windows Node host)
 - npm dependencies installed (`cd desktop && npm install`)
 
 ---
@@ -440,8 +425,7 @@ Operational Windows scripts now live under `scripts/windows/`. Root `.bat` and `
 ├── desktop/                     # Electron desktop app
 │   ├── src/                     # Main process (TypeScript)
 │   └── renderer/                # Vue 3 renderer process
-├── appcontainer/                # Legacy inactive AppContainer sources (not packaged)
-├── desktop/mxc-plugin/          # Experimental MXC-backed OpenClaw tools
+├── appcontainer/                # Windows AppContainer sandbox (.NET + preload hooks)
 ├── skills/                      # Managed skill definitions
 ├── plugins/openclaw-weixin/     # WeChat channel plugin
 ├── scripts/
@@ -468,9 +452,11 @@ See [docs/architecture/repository-layout.md](docs/architecture/repository-layout
 
 Most users can do everything from **Settings** inside the desktop app — models, Brave API key, skill allowlist, etc. Runtime settings live in `~/.openclaw/openclaw.json`; you can hand-edit it if needed.
 
-This mandatory-worker experiment does not install host-side search plugins or warm up a Gateway
-before the desktop proves MXC readiness. Existing provider configuration is preserved, but it does
-not override the worker-only tool allowlist or authorize a host fallback.
+Fresh installs include the official Parallel web-search plugin pinned to **2026.10.5**, matching
+the default OpenClaw runtime, and select its keyless
+`parallel-free` provider, so web search works without additional setup. Usable existing web-search
+provider choices are preserved during upgrades; Brave or Tavily without an API key falls back to
+Parallel. The provider can be changed later in **Settings**.
 
 For developers / unattended installs, the installer also accepts a `.env` file (`MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL_NAME`, `MODEL_API_FORMAT`, `MODEL_REASONING_EFFORT`, `BRAVE_API_KEY`) — see [.env.example](.env.example). `python deploy.py` reads `.env` from the repo root; the packaged `MicroClawInstaller.exe` reads `.env` from next to the exe.
 

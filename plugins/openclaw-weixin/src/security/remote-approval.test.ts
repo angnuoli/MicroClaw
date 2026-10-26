@@ -33,10 +33,10 @@ describe("WeChat remote approval ingress normalization", () => {
       ),
     ).toMatchObject({
       accountId: "bot@im.wechat",
-      senderId: "owner@im.wechat",
-      conversationId: "owner@im.wechat",
+      senderId: "OWNER@IM.WECHAT",
+      conversationId: "OWNER@IM.WECHAT",
       messageId: "1001",
-      cursor: 42,
+      cursor: "42",
       agentId: "main",
       sessionKey: "agent:main:weixin:owner",
       direct: true,
@@ -44,6 +44,13 @@ describe("WeChat remote approval ingress normalization", () => {
       quoted: false,
       text: "1 23456789",
     });
+  });
+
+  it("preserves exact canonical decimal provider strings without Number conversion", () => {
+    expect(normalizeInboundSource(
+      message({ message_id: "18446744073709551000", seq: "9007199254740993" }),
+      "bot", "main", "s",
+    )).toMatchObject({ messageId: "18446744073709551000", cursor: "9007199254740993" });
   });
 
   it("marks group, forwarded, and quoted forms as ineligible", () => {
@@ -128,9 +135,19 @@ describe("WeChat remote approval ingress normalization", () => {
           message({
             item_list: [{ type: MessageItemType.TEXT, text_item: { text } }],
           }),
-        ).candidateLike,
-      ).toBe(false);
+        ),
+      ).toEqual({ candidateLike: true, ambiguous: false, text });
     }
+    expect(
+      classifyWeixinRemoteApprovalCandidate(
+        message({
+          item_list: [
+            { type: MessageItemType.TEXT, text_item: { text: "1" } },
+            { type: MessageItemType.IMAGE },
+          ],
+        }),
+      ),
+    ).toEqual({ candidateLike: true, ambiguous: true, text: "1" });
     expect(
       normalizeInboundSource(
         message({

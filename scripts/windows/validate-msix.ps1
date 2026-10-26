@@ -33,14 +33,15 @@ try {
         'MicroClawDesktop.exe',
         'resources\node.exe',
         'resources\openclaw.asar',
-        'resources\mxc-plugin\index.mjs',
-        'resources\mxc-plugin\runtime.mjs',
-        'resources\mxc-plugin\worker.mjs',
-        'resources\mxc-plugin\openclaw.plugin.json',
-        'resources\mxc-plugin\node_modules\@microsoft\mxc-sdk\package.json',
-        'resources\mxc-plugin\node_modules\@microsoft\mxc-sdk\bin\x64\wxc-exec.exe',
-        'resources\mxc-plugin\node_modules\node-pty\package.json',
-        'resources\mxc-plugin\node_modules\semver\package.json'
+        'resources\AppContainerLauncher.exe',
+        'resources\sandbox-preload.js',
+        'resources\sandbox-host-runtime.js',
+        'resources\sandbox-state.js',
+        'resources\sandbox-permission.js',
+        'resources\sandbox-fs-hooks.js',
+        'resources\sandbox-cp-hooks.js',
+        'resources\sandbox-sensitive.js',
+        'resources\path-extraction.js'
     )
     $packageFiles = $archive.Entries.FullName |
         ForEach-Object { [Uri]::UnescapeDataString($_).Replace('/', '\') }

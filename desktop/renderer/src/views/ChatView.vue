@@ -107,7 +107,7 @@
     <ModelSetupDialog
       v-model="modelSetupVisible"
       :initial-family="modelSetupInitialFamily"
-      :streaming="chatStore.streaming"
+      :streaming="chatStore.streaming || Boolean(chatStore.activityStatus)"
       @configured="handleModelConfigured"
     />
   </div>
@@ -159,7 +159,9 @@ function onWindowResize() {
   isCompact.value = window.innerHeight < 700;
 }
 
-const hasMessages = computed(() => chatStore.messages.length > 0 || chatStore.streaming);
+const hasMessages = computed(
+  () => chatStore.messages.length > 0 || chatStore.streaming || Boolean(chatStore.activityStatus),
+);
 
 function handleCardSelect(prompt: string) {
   inputText.value = prompt;
@@ -223,6 +225,7 @@ const composePlaceholder = computed(() =>
 const canSend = computed(
   () =>
     chatStore.wsConnected &&
+    !chatStore.activityStatus &&
     !chatStore.agentPreparationError &&
     !submittingMessage.value &&
     !pickingFiles.value &&
@@ -237,6 +240,7 @@ watch(
     chatStore.streamText,
     chatStore.streaming,
     chatStore.streamToolCalls.length,
+    chatStore.activityStatus,
   ],
   () => {
     if (!isUserScrolledUp) {

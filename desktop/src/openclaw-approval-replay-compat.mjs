@@ -139,6 +139,111 @@ const APPROVAL_PROOF_MINTER_SYMBOL = Symbol.for("microclaw.windows-node-mxc.appr
 const HOOKS_GATE_SYMBOL = Symbol.for("microclaw.windows-node-mxc.hooks-gate.v1");
 const PRELOAD_INITIALIZED_ENV = "MICROCLAW_MXC_APPROVAL_PRELOAD_INITIALIZED";
 
+export function buildMxcApprovalContextDiagnostic(stage, context, hashString) {
+  if (
+    ![
+      "gateway-approval-requested",
+      "exec-defaults",
+      "node-prepare-input",
+      "node-prepare-output",
+    ].includes(stage)
+  ) {
+    throw new Error("Unsupported MXC approval diagnostic stage");
+  }
+  function descriptor(record, key) {
+    return record && typeof record === "object" && !Array.isArray(record)
+      ? Object.getOwnPropertyDescriptor(record, key)
+      : undefined;
+  }
+  function read(record, key) {
+    const field = descriptor(record, key);
+    return field && "value" in field ? field.value : undefined;
+  }
+  function describe(record, key) {
+    const field = descriptor(record, key);
+    if (!field) return { present: false, type: "missing" };
+    if (!("value" in field)) return { present: true, type: "accessor" };
+    const value = field.value;
+    return {
+      present: true,
+      type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value,
+      ...(typeof value === "string" ? { hash: hashString(value), length: value.length } : {}),
+    };
+  }
+  function fields(record, keys) {
+    return Object.fromEntries(keys.map((key) => [key, describe(record, key)]));
+  }
+  const envelope = read(context, "envelope");
+  const request =
+    stage === "gateway-approval-requested" ? read(envelope, "request") : read(context, "request");
+  const plan =
+    stage === "gateway-approval-requested" ? read(request, "systemRunPlan") : read(context, "plan");
+  const defaults = read(context, "defaults");
+  const origin =
+    stage === "gateway-approval-requested" ? read(envelope, "origin") : read(context, "origin");
+  return {
+    contract: "microclaw.mxc-approval-context-diagnostic.v1",
+    stage,
+    envelope: fields(envelope, [
+      "id",
+      "sessionKey",
+      "agentId",
+      "runId",
+      "toolCallId",
+      "originatingClientId",
+    ]),
+    request: fields(request, [
+      "sessionKey",
+      "agentId",
+      "runId",
+      "toolCallId",
+      "origin",
+      "originatingClientId",
+      "originatingDeviceId",
+      "turnSourceChannel",
+      "turnSourceTo",
+      "turnSourceAccountId",
+      "turnSourceThreadId",
+    ]),
+    plan: fields(plan, ["sessionKey", "agentId", "runId", "toolCallId"]),
+    defaults: fields(defaults, [
+      "sessionKey",
+      "runSessionKey",
+      "notifySessionKey",
+      "sessionId",
+      "agentId",
+      "runId",
+      "messageProvider",
+      "currentChannelId",
+      "accountId",
+    ]),
+    origin: fields(origin, [
+      "kind",
+      "channel",
+      "sessionKey",
+      "agentId",
+      "runId",
+      "toolCallId",
+      "turnSourceChannel",
+      "turnSourceTo",
+      "turnSourceAccountId",
+      "turnSourceThreadId",
+    ]),
+  };
+}
+
+export function describeMxcApprovalContext(stage, context) {
+  return buildMxcApprovalContextDiagnostic(stage, context, (value) =>
+    createHash("sha256").update(value).digest("hex").slice(0, 16),
+  );
+}
+
+const MXC_APPROVAL_CONTEXT_DIAGNOSTIC_SOURCE = `${buildMxcApprovalContextDiagnostic.toString()}
+function logMicroclawMxcApprovalContext(stage, context) {
+\tif (process.env.MICROCLAW_WINDOWS_NODE_MXC_APPROVAL_COMPAT !== "1") return;
+\tconsole.info("[weixin-remote-approval-context]", buildMxcApprovalContextDiagnostic(stage, context, (value) => crypto.createHash("sha256").update(value).digest("hex").slice(0, 16)));
+}`;
+
 export function classifyWindowsNodeMxcInvokeFailure(error) {
   const asRecord = (value) =>
     value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -577,7 +682,8 @@ export const PINNED_SYSTEM_RUN_PLAN_SOURCE = `function normalizeSystemRunApprova
 \t};
 }`;
 
-const PATCHED_SYSTEM_RUN_PLAN_SOURCE = `function normalizeMicroclawSystemRunDeclaredAccess(value) {
+const PATCHED_SYSTEM_RUN_PLAN_SOURCE = `${normalizePowerShellProviderInitialization.toString()}
+function normalizeMicroclawSystemRunDeclaredAccess(value) {
 \tif (!Array.isArray(value)) return null;
 \tconst entries = [];
 \tfor (const item of value) {
@@ -591,7 +697,9 @@ const PATCHED_SYSTEM_RUN_PLAN_SOURCE = `function normalizeMicroclawSystemRunDecl
 }
 function normalizeSystemRunApprovalPlan(candidate) {
 \tif (!isRecord(candidate)) return null;
-\tconst argv = normalizeStringArray(candidate.argv);
+\tconst argv = candidate.executablePath !== void 0
+\t\t? Array.isArray(candidate.argv) && candidate.argv.every(value => typeof value === "string" && value.length > 0) ? [...candidate.argv] : []
+\t\t: normalizeStringArray(candidate.argv);
 \tif (argv.length === 0) return null;
 \tconst mutableFileOperand = normalizeSystemRunApprovalFileOperand(candidate.mutableFileOperand);
 \tif (candidate.mutableFileOperand !== void 0 && mutableFileOperand === null) return null;
@@ -604,12 +712,17 @@ function normalizeSystemRunApprovalPlan(candidate) {
 \tconst executableSha256 = normalizeNullableString(candidate.executableSha256);
 \tconst cwdBinding = normalizeNullableString(candidate.cwdBinding);
 \tconst declaredAccess = normalizeMicroclawSystemRunDeclaredAccess(candidate.declaredAccess);
+\tconst providerInitialization = candidate.providerInitialization === void 0 ? void 0 : normalizePowerShellProviderInitialization(candidate.providerInitialization);
+\tif (candidate.providerInitialization !== void 0 && !providerInitialization) return null;
+\tif (providerInitialization && !hasMicroclawIdentity) return null;
+\tif (argv.some(argument => argument.includes("[void]'microclaw.powershell-filesystem-scope.")) && !providerInitialization) return null;
+\tif (providerInitialization && (providerInitialization.finalArgv.length !== argv.length || providerInitialization.finalArgv.some((argument, index) => argument !== argv[index]))) return null;
 \tif (hasMicroclawIdentity && (!executablePath || !/^[a-z]:\\\\/i.test(executablePath) || !executableSha256 || !/^[a-f0-9]{64}$/i.test(executableSha256) || !cwdBinding || declaredAccess === null)) return null;
 \treturn {
 \t\targv,
 \t\tcwd: normalizeNullableString(candidate.cwd),
 \t\tcommandText,
-\t\tcommandPreview: normalizeNullableString(candidate.commandPreview),
+\t\tcommandPreview: providerInitialization && typeof candidate.commandPreview === "string" ? candidate.commandPreview : normalizeNullableString(candidate.commandPreview),
 \t\tagentId: normalizeNullableString(candidate.agentId),
 \t\tsessionKey: normalizeNullableString(candidate.sessionKey),
 \t\t...policySnapshot ? { policySnapshot } : {},
@@ -618,7 +731,8 @@ function normalizeSystemRunApprovalPlan(candidate) {
 \t\t\texecutablePath,
 \t\t\texecutableSha256: executableSha256.toLowerCase(),
 \t\t\tcwdBinding,
-\t\t\tdeclaredAccess
+\t\t\tdeclaredAccess,
+\t\t\t...providerInitialization ? { providerInitialization } : {}
 \t\t} : {}
 \t};
 }`;
@@ -626,11 +740,54 @@ function normalizeSystemRunApprovalPlan(candidate) {
 export const PINNED_EXEC_APPROVAL_VALIDATION_SOURCE = `\t\t"exec.approval.request": async ({ params, respond, context, client }) => {
 \t\t\tif (!assertValidParams(params, validateExecApprovalRequestParams, "exec.approval.request", respond)) return;`;
 
+export function buildGatewayApprovalOrigin(identity, request, gatewayGeneration) {
+  const nonempty = (value) => typeof value === "string" && value.length > 0;
+  if (
+    request.host !== "node" ||
+    !identity ||
+    identity.agentId !== request.agentId ||
+    identity.operationalRunInstance?.runId !== request.runId ||
+    ![
+      identity.sessionKey,
+      identity.operationalRunInstance?.instanceId,
+      request.agentId,
+      request.sessionKey,
+      request.runId,
+      request.toolCallId,
+      request.nodeId,
+      gatewayGeneration,
+      identity.turnSourceChannel,
+      identity.turnSourceAccountId,
+      identity.turnSourceTo,
+    ].every(nonempty)
+  )
+    return undefined;
+  return {
+    contract: "microclaw.gateway-approval-origin.v1",
+    gatewayGeneration,
+    agentId: request.agentId,
+    runSessionKey: identity.sessionKey,
+    executionSessionKey: request.sessionKey,
+    runId: request.runId,
+    toolCallId: request.toolCallId,
+    nodeId: request.nodeId,
+    channel: identity.turnSourceChannel,
+    accountId: identity.turnSourceAccountId,
+    to: identity.turnSourceTo,
+  };
+}
+
+const PINNED_EXEC_APPROVAL_ORIGIN_SOURCE = `\t\t\tif (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {`;
+const PATCHED_EXEC_APPROVAL_ORIGIN_SOURCE = `\t\t\t// Only the already-validated internal runtime identity supplies conversation lineage.
+\t\t\tconst remoteApprovalOrigin = buildGatewayApprovalOrigin(trustedAgentRuntime, request, process.env.MICROCLAW_MXC_APPROVAL_PROOF_GATEWAY_GENERATION);
+\t\t\tif (remoteApprovalOrigin) request.remoteApprovalOrigin = remoteApprovalOrigin;
+${PINNED_EXEC_APPROVAL_ORIGIN_SOURCE}`;
+
 const PATCHED_EXEC_APPROVAL_VALIDATION_SOURCE = `\t\t"exec.approval.request": async ({ params, respond, context, client }) => {
 \t\t\tconst rawPlan = params && typeof params === "object" && !Array.isArray(params) && params.systemRunPlan && typeof params.systemRunPlan === "object" && !Array.isArray(params.systemRunPlan) ? params.systemRunPlan : null;
 \t\t\tconst validationParams = rawPlan ? {
 \t\t\t\t...params,
-\t\t\t\tsystemRunPlan: Object.fromEntries(Object.entries(rawPlan).filter(([name]) => name !== "executablePath" && name !== "executableSha256" && name !== "cwdBinding" && name !== "declaredAccess"))
+\t\t\t\tsystemRunPlan: Object.fromEntries(Object.entries(rawPlan).filter(([name]) => name !== "executablePath" && name !== "executableSha256" && name !== "cwdBinding" && name !== "declaredAccess" && name !== "providerInitialization"))
 \t\t\t} : params;
 \t\t\tif (!assertValidParams(validationParams, validateExecApprovalRequestParams, "exec.approval.request", respond)) return;`;
 
@@ -735,12 +892,18 @@ export function patchPinnedOpenClawSystemRun(source) {
 }
 
 export function patchPinnedOpenClawExecApproval(source) {
-  return replaceExactlyOnce(
+  const patched = replaceExactlyOnce(
     source,
     PINNED_EXEC_APPROVAL_VALIDATION_SOURCE,
     PATCHED_EXEC_APPROVAL_VALIDATION_SOURCE,
     "exec approval schema projection",
   );
+  return `${buildGatewayApprovalOrigin.toString()}\n${replaceExactlyOnce(
+    patched,
+    PINNED_EXEC_APPROVAL_ORIGIN_SOURCE,
+    PATCHED_EXEC_APPROVAL_ORIGIN_SOURCE,
+    "authenticated approval origin projection",
+  )}`;
 }
 
 export const PINNED_BASH_TOOLS_FAILURE_CLASSIFIER_SOURCE = `/** Only NOT_CONNECTED plus explicit pre-dispatch provenance proves a retry cannot duplicate work. */
@@ -814,6 +977,7 @@ export const PINNED_BASH_TOOLS_FAILURE_REGION_SOURCE = `//#region src/agents/bas
 /** Only explicit trusted provenance can prove that node execution did not begin. */`;
 
 const PATCHED_BASH_TOOLS_FAILURE_REGION_SOURCE = `//#region src/agents/bash-tools.exec-host-node-failure.ts
+${MXC_APPROVAL_CONTEXT_DIAGNOSTIC_SOURCE}
 const microclawUnresolvedNodeRuns = new Map();
 function buildMicroclawUnresolvedNodeRunKey(nodeId, plan) {
 \treturn crypto.createHash("sha256").update(JSON.stringify({
@@ -870,6 +1034,7 @@ export const PINNED_BASH_TOOLS_HOST_SELECTION_SOURCE = `\t\t\tconst host = targe
 \t\t\tconst explicitSecurity = defaults?.security;`;
 const PATCHED_BASH_TOOLS_HOST_SELECTION_SOURCE = `\t\t\tconst host = target.effectiveHost;
 \t\t\tif (process.env.MICROCLAW_WINDOWS_NODE_MXC_APPROVAL_COMPAT === "1" && host !== "node") throw new Error("MicroClaw MXC execution is locked to host=node. Do not retry with gateway or sandbox host overrides.");
+\t\t\tif (host === "node") logMicroclawMxcApprovalContext("exec-defaults", { defaults, origin: { agentId, toolCallId } });
 \t\t\tconst explicitSecurity = defaults?.security;`;
 
 export const PINNED_BASH_TOOLS_PREPARED_SOURCE = `\tconst prepared = await prepareNodeSystemRun({
@@ -882,7 +1047,8 @@ export const PINNED_BASH_TOOLS_PREPARED_SOURCE = `\tconst prepared = await prepa
 \t});
 \tconst approvalAnalysis = await analyzeNodeApprovalRequirement({`;
 
-const PATCHED_BASH_TOOLS_PREPARED_SOURCE = `\tconst prepared = await prepareNodeSystemRun({
+const PATCHED_BASH_TOOLS_PREPARED_SOURCE = `\tlogMicroclawMxcApprovalContext("node-prepare-input", { request: params, origin: params });
+\tconst prepared = await prepareNodeSystemRun({
 \t\trequest: {
 \t\t\t...params,
 \t\t\tsecurity: hostSecurity,
@@ -890,6 +1056,7 @@ const PATCHED_BASH_TOOLS_PREPARED_SOURCE = `\tconst prepared = await prepareNode
 \t\t},
 \t\ttarget
 \t});
+\tlogMicroclawMxcApprovalContext("node-prepare-output", { request: params, plan: prepared.plan, origin: params });
 \tconst microclawUnresolvedRunKey = buildMicroclawUnresolvedNodeRunKey(target.nodeId, prepared.plan);
 \tconst microclawUnresolvedRun = findMicroclawUnresolvedNodeRun(microclawUnresolvedRunKey);
 \tif (microclawUnresolvedRun) return formatMicroclawUnresolvedNodeRunResult({
@@ -1414,6 +1581,41 @@ function encodeNullableField(name, value) {
   return value === null ? `${name}=-1:` : encodeField(name, value);
 }
 
+export function normalizePowerShellProviderInitialization(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 5
+  )
+    return null;
+  const keys = ["contract", "form", "originalArgv", "originalCommandPreview", "finalArgv"];
+  if (
+    Object.keys(value).some((key) => !keys.includes(key)) ||
+    value.contract !== "microclaw.powershell-filesystem-scope.v1" ||
+    (value.form !== "direct" && value.form !== "nested") ||
+    typeof value.originalCommandPreview !== "string" ||
+    !value.originalCommandPreview ||
+    value.originalCommandPreview.length > 8192
+  )
+    return null;
+  for (const argv of [value.originalArgv, value.finalArgv])
+    if (
+      !Array.isArray(argv) ||
+      argv.length < 4 ||
+      argv.length > 8 ||
+      argv.some((argument) => typeof argument !== "string" || !argument || argument.length > 4096)
+    )
+      return null;
+  return {
+    contract: value.contract,
+    form: value.form,
+    originalArgv: [...value.originalArgv],
+    originalCommandPreview: value.originalCommandPreview,
+    finalArgv: [...value.finalArgv],
+  };
+}
+
 function normalizeApprovalPlan(plan) {
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
     throw new Error("MicroClaw approval proof requires a prepared system.run plan");
@@ -1447,6 +1649,11 @@ function normalizeApprovalPlan(plan) {
     }
     return value;
   };
+  const providerInitialization = Object.hasOwn(plan, "providerInitialization")
+    ? normalizePowerShellProviderInitialization(plan.providerInitialization)
+    : undefined;
+  if (Object.hasOwn(plan, "providerInitialization") && !providerInitialization)
+    throw new Error("MicroClaw approval proof provider initialization is invalid");
   return {
     argv: [...plan.argv],
     cwd: nullableString("cwd", true),
@@ -1458,6 +1665,7 @@ function normalizeApprovalPlan(plan) {
     executableSha256: requiredString("executableSha256").toLowerCase(),
     cwdBinding: requiredString("cwdBinding"),
     declaredAccess: normalizeDeclaredAccess(plan.declaredAccess),
+    ...(providerInitialization ? { providerInitialization } : {}),
   };
 }
 
@@ -1502,6 +1710,24 @@ export function computeWindowsNodeMxcApprovalPlanSha256(plan) {
       encodeField("path", entry.path),
     ]),
   ];
+  const initialization = normalized.providerInitialization;
+  if (initialization)
+    fields.push(
+      encodeField("providerInitialization.contract", initialization.contract),
+      encodeField("providerInitialization.form", initialization.form),
+      `providerInitialization.originalArgv=${initialization.originalArgv.length}`,
+      ...initialization.originalArgv.map((argument) =>
+        encodeField("providerInitialization.originalArg", argument),
+      ),
+      encodeField(
+        "providerInitialization.originalCommandPreview",
+        initialization.originalCommandPreview,
+      ),
+      `providerInitialization.finalArgv=${initialization.finalArgv.length}`,
+      ...initialization.finalArgv.map((argument) =>
+        encodeField("providerInitialization.finalArg", argument),
+      ),
+    );
   return createHash("sha256").update(fields.join("\n"), "utf8").digest("hex");
 }
 

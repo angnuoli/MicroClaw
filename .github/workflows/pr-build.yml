@@ -2,7 +2,8 @@
 #
 # Runs the end-to-end packaging script (build.ps1) on every PR.
 # Verifies that the entire pipeline still produces:
-#   - pinned MXC plugin and secret-stripped worker resources
+#   - AppContainerLauncher.exe (.NET 9)
+#   - bundled Windows Node host (.NET 10) + official MXC runtime
 #   - desktop\release\win-unpacked\ (electron-builder)
 #   - dist\microclaw-portable.zip
 #   - dist\MicroClawInstaller\ + dist\MicroClawInstaller.zip (PyInstaller)

@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-**MicroClaw** 的目标是让 [OpenClaw](https://github.com/openclaw) 在 Windows 上做到“装好就能用”。此分支包含 Microsoft MXC 实验性沙箱 POC。
+**MicroClaw** 的目标是让 [OpenClaw](https://github.com/openclaw) 在 Windows 上做到“装好就能用”。它把桌面客户端、本地 Gateway、运行时、预装技能和带权限控制的沙箱整合成一个熟悉、低摩擦的安装体验，让用户尽快进入真实任务。你只需要提供大模型连接信息，Windows 侧运行环境、桌面应用和信任边界都由 MicroClaw 预置完成。
 
 > [!WARNING]
 > **AI 与安全声明**
@@ -19,7 +19,7 @@ MicroClaw 的设计重点，是把 OpenClaw 在 Windows 上常见的安装和配
 ### 即装即用
 
 - **熟悉的 Windows 安装流程**：带桌面快捷方式、开始菜单入口和一键卸载
-- **一次安装补齐运行环境**：自动准备 Git、受管 Node.js、OpenClaw Gateway、MicroClaw 桌面端、托管技能和固定版本 MXC 包
+- **一次安装补齐运行环境**：自动准备 Git、受管 Node.js、OpenClaw Gateway、MicroClaw 桌面端、托管技能和 AppContainer 配置
 - **安装完成即可启动**：不需要先手动搭本地 OpenClaw 运行环境
 
 ### 真正可用，而不是只装了个壳
@@ -31,23 +31,10 @@ MicroClaw 的设计重点，是把 OpenClaw 在 Windows 上常见的安装和配
 
 ### 内建信任
 
-- **原生文件夹策略**：通过桌面端原生选择器配置只读/读写文件夹
-- **Microsoft MXC 实验**：专用 Node 工作进程通过 `@microsoft/mxc-sdk@0.7.0` 启动
-- **唯一强制后端**：此分支不提供可单独切换的 Windows Node + MXC 路径，也不回退到 AppContainer 或宿主工具。保留的旧设置和同意记录不会成为执行授权。
-- **故障关闭**：禁用 OpenClaw 主机文件/运行时、提权、浏览器、画布和原生代码执行工具；MXC 工具没有主机回退
+- **动作透明、权限可控**：文件和工具访问需要明确向用户申请，而不是静默放行
+- **基于 Windows AppContainer 的沙箱隔离**：在支持的系统上，工具执行运行在操作系统强制边界内
+- **Hook 加沙箱，形成纵深防御**：Hook 负责更好的交互体验，真正的安全边界仍由 AppContainer ACL 强制执行
 - **敏感路径直接硬拦截**：例如 `.ssh`、云凭据目录等不会只是提醒，而是直接拒绝访问
-
-> [!WARNING]
-> 本分支固定 [`@microsoft/mxc-sdk@0.7.0`](https://github.com/microsoft/mxc/tree/v0.7.0)
->（提交 `34d7fe2b4b3226bd4d11dc4a32419b7ec198a88b`）和稳定策略
-> `0.7.0-alpha`。MXC 仍是**公共预览**：策略可能过度宽松，当前没有任何配置可作为生产安全边界。
-> POC 设置 `fallback.allowDaclMutation=false`。Microsoft 文档要求管理员明确同意运行
-> `wxc-host-prep prepare-system-drive`（机器级元数据 ACE）及 `prepare-null-device`，MSIX 无法串联这些步骤。
-> MicroClaw 不会自动运行、提权或修改 ACL；本 POC 也无法验证准备状态或收集临时文件夹 DACL 修改同意，
-> 因此在 `appcontainer-dacl` 层级仍保持阻止，且不会静默清理旧 AppContainer ACL。
->
-> POC 范围有意收窄：文件工具仅支持 UTF-8 且上限 1 MiB，`mxc_edit` 只替换一个唯一字符串，
-> `mxc_exec` 为非交互式（最多 30 秒、输出 1 MiB）。不提供后台进程控制、`apply_patch`、无限制主机回退或自动主机准备。
 
 ---
 
@@ -56,7 +43,7 @@ MicroClaw 的设计重点，是把 OpenClaw 在 Windows 上常见的安装和配
 | 组件 | 路径 | 技术栈 | 说明 |
 |---|---|---|---|
 | **桌面应用** | `desktop/` | Electron 33 + TypeScript + Vue 3 + Element Plus | 聊天界面、Gateway 生命周期管理、托盘菜单 |
-| **MXC 工具插件** | `desktop/mxc-plugin/` | OpenClaw Plugin SDK + MXC 0.7.0 | 注册 `mxc_*` 工具并启动受隔离工作进程 |
+| **AppContainer 沙盒** | `appcontainer/` | .NET 9 + Node.js preload hooks | Windows AppContainer 启动器 + 权限钩子，隔离工具执行 |
 | **安装器** | `deploy.py` + `deployer/` | Python 3 + Tkinter | 向导式图形化安装器（可打包为单文件 exe） |
 | **技能包** | `skills/` | Markdown + JSON + Python/Node | Office、搜索、浏览器自动化等托管技能 |
 | **微信插件** | `plugins/openclaw-weixin/` | TypeScript + OpenClaw Plugin SDK | 微信频道接入 |
@@ -86,7 +73,7 @@ MicroClaw 仅支持 **Windows 10/11**。对大多数用户来说，真正需要�
 - Node.js 26，通过官方签名 `.msi` 以 per-machine 方式安装到 `%ProgramFiles%\nodejs\`（UAC 提权；若该路径已存在受支持的系统 Node 则直接复用；支持范围为 `>=24.16.0 <25 || >=26.1.0`，下载回退版本为 `26.1.0`）
 - OpenClaw Gateway，默认 `stable` 通道固定为 **2026.10.3**（`npm install -g openclaw@2026.10.3`）
 - 配置 npm 镜像源与 V8 编译缓存
-- 安装 MicroClaw 桌面客户端、托管技能及固定版本 MXC 运行时；微信插件不随安装包捆绑，也不会自动安装
+- 安装 MicroClaw 桌面客户端、托管技能及 Windows 沙箱组件；微信插件不随安装包捆绑，也不会自动安装
 - 添加 Windows Defender 排除项，创建桌面快捷方式（含一键卸载）
 
 安装完成后，从开始菜单或桌面快捷方式启动 **MicroClaw**。桌面应用会自动拉起 Gateway。
@@ -157,7 +144,7 @@ OpenClaw 固定版本未变化时，桌面更新只刷新托管文件，不在�
 - 切换模型会保留云端及本地连接，不新增自动云端兜底。已有 OpenClaw fallback、agent 或会话模型覆盖仍需单独检查。本地推理不代表联网技能可以离线运行。
 - 本地向导未结束时仍可打开云端设置。只有实际保存或切换模型时，才会询问是否先取消冲突的本地配置；拒绝后保持原状。本地模型未配置的目录项仅限这两个固定预设，其他已有连接仍保留；本地连接管理放在高级选项中。
 - 集成会检查 Gateway 的公开设置接口，支持 OpenClaw 2026.10.2、2026.10.3 或 2026.9.x 中的 2026.9.3 及以上版本。内置官方目录没有该插件时，MicroClaw 核对 ClawHub 官方包身份并请求固定版本 `@openclaw/llama-cpp-provider@2026.9.3`，不追随浮动最新版。下载、运行时依赖与 GPU 支持仍以官方插件为准。
-- 实际配置写入仍受当前回复和未结束配置操作的保护。准备本地模型本身不再阻止已有聊天，真正应用模型变更时仍会保护当前请求。断线后恢复原操作，不重复启动；OpenClaw 正在完成受保护步骤时可能暂不接受取消。
+- 实际配置写入仍受 Windows Node + MXC、当前回复和未结束配置操作的保护。准备本地模型本身不再阻止已有聊天，真正应用模型变更时仍会保护当前请求。断线后恢复原操作，不重复启动；OpenClaw 正在完成受保护步骤时可能暂不接受取消。
 
 **Windows 兼容处理：**MicroClaw 为受支持 OpenClaw 中的指定 `fs-safe@0.8.5` 依赖回移了[上游 Windows 文件打开时间戳修复](https://github.com/openclaw/fs-safe/commit/6ae2e2e5086f2c48b813f78cb65fd787c9879a3f)，并补充复制后 `ctime` 延迟更新的收尾处理：仅允许身份、大小和修改时间不变的单链接普通文件进入复核，且内容必须与复制时记录的 SHA-256 一致。复核采用固定大小缓冲区，核对打开的文件句柄和路径，并在删除授权后再次比对完整身份。真实修改仍报错，硬链接别名不使用该例外。预加载模块核对版本及移动、清理两个模块的 SHA-256 后，仅在内存中应用修复，不修改已安装的 OpenClaw 文件。其他依赖版本保持原样；修改过的 0.8.5 源码会被明确拒绝。这些检查只在文件移动时执行，不会在打开模型设置时读取模型内容。
 
@@ -274,7 +261,7 @@ npm run dev
 | **技能完整性校验** | SHA-256 哈希 + Ed25519 签名，启动时检测所有技能文件是否被篡改 |
 | **设备认证** | 每台设备生成 Ed25519 密钥对，Gateway 连接时签名认证 |
 | **技能白名单** | `allowBundled` / `allowManaged` 控制可用技能范围 |
-| **沙盒隔离** | 实验性 MXC 0.7.0 工作进程；校验哈希、禁用网络/UI、严格文件夹策略且无主机回退 |
+| **沙盒隔离** | Windows AppContainer 沙盒，限制 AI 工具执行环境 |
 | **本地 Gateway** | 仅绑定 loopback，不接受远程连接 |
 
 ---
@@ -297,6 +284,8 @@ npm run dev
 
 - Node.js 26.1+（推荐），或 24.x 系列的 24.16+
 - Python 3.10+ —— 通过 `pip install -r requirements.txt` 安装构建依赖（已包含 PyInstaller）
+- .NET 9 SDK（用于构建 AppContainer 启动器）
+- .NET 10 SDK（用于构建内置 Windows Node 主机）
 - npm 依赖已安装（`cd desktop && npm install`）
 
 ---
@@ -316,8 +305,7 @@ Windows 侧运维脚本现在统一放在 `scripts/windows/` 下。仓库根目�
 ├── desktop/                     # Electron 桌面应用
 │   ├── src/                     # 主进程（TypeScript）
 │   └── renderer/                # Vue 3 渲染进程
-├── appcontainer/                # 旧版未激活 AppContainer 源码（不再打包）
-├── desktop/mxc-plugin/          # 实验性 MXC OpenClaw 工具
+├── appcontainer/                # Windows AppContainer 沙盒（.NET + preload hooks）
 ├── skills/                      # 托管技能定义
 ├── plugins/openclaw-weixin/     # 微信频道插件
 ├── scripts/
@@ -344,8 +332,9 @@ Windows 侧运维脚本现在统一放在 `scripts/windows/` 下。仓库根目�
 
 普通用户在**桌面应用 设置**里完成所有配置即可：模型、Brave API Key、技能白名单等。运行时配置存于 `~/.openclaw/openclaw.json`，如有需要可手动编辑。
 
-此强制工作进程实验不会安装宿主侧搜索插件，也不会在桌面端验证 MXC 就绪前预热 Gateway。
-已有提供商配置会保留，但不能覆盖仅允许工作进程工具的策略或授权宿主回退。
+全新安装会预装与默认 OpenClaw 运行时同版的官方 Parallel 联网搜索插件（固定为 **2026.10.3**），并默认选择无需 API 密钥的 `parallel-free`
+提供商，因此安装后即可直接使用联网搜索。升级时会保留可用的联网搜索提供商；未配置 API 密钥
+的 Brave 或 Tavily 会自动回退到 Parallel。之后也可在**设置**中修改。
 
 开发者/批量部署可通过 `.env` 预置凭据（`MODEL_BASE_URL` / `MODEL_API_KEY` / `MODEL_NAME` / `MODEL_API_FORMAT` / `MODEL_REASONING_EFFORT` / `BRAVE_API_KEY`），详见 [.env.example](.env.example)。运行 `python deploy.py` 时读仓库根目录的 `.env`；运行打包后的 `MicroClawInstaller.exe` 时读与 exe 同目录的 `.env`。
 

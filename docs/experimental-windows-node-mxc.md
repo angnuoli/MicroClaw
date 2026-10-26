@@ -4,6 +4,13 @@ This branch implements the Windows execution-host experiment for
 [security framework issue #202](https://github.com/microsofthackathons/MicroClaw/issues/202).
 It remains independent of the Docker and direct-MXC experiments.
 
+The selected integration in PR #240 uses this native Windows Node architecture in
+place of the mandatory plugin-worker experiment merged in PR #205. The worker is
+not an additional active backend or fallback. Worker-only folder policies do not
+constitute native filesystem grants or WeChat approval consent; this integration
+does not automatically convert them. The native mode disclosures, exact grants,
+and Main-owned WeChat enrollment described below remain authoritative.
+
 ## Architecture and boundary
 
 ```text
@@ -179,11 +186,38 @@ access.
 
 ## WeChat remote approval (Experimental)
 
-WeChat remote approval is a separate, default-off capability under **Settings > Security**. Enabling
-or rebinding requires a local Electron confirmation and binds exactly one authenticated QR-login
-account ID plus its saved WeChat `userId`, which must also be present in the explicit sender
-allowlist; a display name is never an identity. Phase 1 accepts only that owner in a one-to-one chat.
-Group, forwarded, quoted, ambiguous-account, stale-cursor, and out-of-order forms cannot approve.
+WeChat remote approval is a default-off choice in the local MXC activation flow, not a standalone
+Settings toggle. When MXC is currently Off and WeChat has exactly one authenticated account,
+one main-process-owned native prompt offers Disabled, Enabled, and Cancel, defaulting to Disabled.
+There is no duplicate renderer WeChat prompt, account selector, or opaque identity block. Cancelling
+or closing the native prompt aborts activation before the Gateway or containment state is mutated,
+without resetting ordinary runtime readiness. Unrelated MXC capability and Limited-filesystem
+disclosures remain. The renderer sends only primitive mode/acknowledgement fields; the main process
+derives the exact owner and native consent is the sole enrollment authority. Renderer-supplied
+remote approval choices are rejected.
+
+The main process re-reads channel state and account credentials immediately after native consent
+and again at the locked transition boundary. An identity change while consent is pending aborts
+activation rather than binding a replacement. It accepts only an exact authenticated
+QR-login account ID plus its saved WeChat `userId`; a display name is never an identity. The approved
+sole identity is atomically added to the account's sender allowlist when necessary, preserving other
+explicit ordinary-message senders without granting them remote approval authority. If WeChat is
+disabled, unavailable, unauthenticated, or in a legacy multiple-account state, MXC skips the popup
+and proceeds with remote approval disabled. Turning MXC Off or replacing the exact identity clears
+the owner binding, so a later activation asks again.
+
+The selected configuration is persisted while the Gateway is locked and before the attested active
+generation, lease, or ingress release is issued. Active Full/Limited mode switches cannot rebind
+remote approval in place. Phase 1 accepts only the selected owner in a one-to-one chat. Group,
+forwarded, quoted, ambiguous-account, stale-cursor, and out-of-order forms cannot approve.
+
+Before starting a managed Gateway, the desktop validates and, when necessary, atomically converges
+the installed WeChat extension to the packaged, content-hashed compatibility artifact for the
+pinned OpenClaw SDK. A same-version extension is not trusted by version alone. The replacement is
+staged and validated before an atomic rename, links its OpenClaw peer dependency to the exact
+Gateway package, rejects nested or incompatible OpenClaw copies, and rolls back the prior extension
+on failure. Account and token state under the separate `openclaw-weixin` state directory is never
+part of this replacement.
 
 The product threat model intentionally treats normalized ingress metadata from the allowlisted
 `openclaw-weixin` plugin and Gateway as authentic user input: account identity, sender identity,
@@ -191,7 +225,77 @@ direct-chat identity, upstream message ID and cursor/order, exact content, and q
 metadata. This trust assumption applies to every WeChat command, not only MXC remote approval.
 MicroClaw does not require an independent WeChat server signature or immutable upstream lookup.
 Compromise of the authenticated WeChat session, the allowlisted plugin, or the Gateway therefore
-remains an explicit product risk and is disclosed in Settings.
+remains an explicit product risk and is disclosed in the local MXC activation dialog.
+
+Provider message IDs and cursors use canonical nonnegative decimal strings internally. Numeric
+JSON literals are preserved from their original source lexemes before floating-point rounding;
+already-decoded unsafe numbers, missing fields, invalid decimals, and values beyond uint64 fail
+remote-approval validation. Diagnostics report wire types/presence and hashed session-binding
+shape, not message contents, credentials, or raw identities. A registered chat-route alias is not
+implicitly equivalent to a different prepared execution-session binding.
+MXC compatibility diagnostics compare fixed, hashed fields at exec defaults, node prepare
+input/output, and the raw approval envelope before normalization. They do not establish route
+equivalence or authorize a request.
+
+Remote delivery requires a Gateway-derived approval origin from the already authenticated agent
+runtime, not a caller-supplied route alias. It preserves the prepared policy/execution session for
+execution and durable approval while separately identifying the originating conversation. The
+plugin's actual SDK run-start callback binds that run to the exact inbound provider message ID,
+cursor, account, sender, conversation, agent, route, and Gateway generation. The authenticated
+origin must also identify the WeChat channel, account, and recipient. Missing or invalid origins,
+unregistered runs, and mismatched providers remain local-only with explicit diagnostics; they
+never fall back to matching a legacy session key. Completed dispatch callbacks cannot register
+another run. No reply syntax or consent capability is upgraded by this binding.
+Persisted consent and public account status retain their canonical identity format. Delivery
+separately reads the exact, case-sensitive peer from the single authenticated credential record.
+The inbound sender, direct conversation, authenticated origin recipient and current credential
+peer must match byte-for-byte. The plugin uses that exact peer for its context-token cache and
+revalidates it before every prompt, fallback, acknowledgement, reminder and terminal send. A
+same-fold peer or alternate cache key is not an identity alias. A changed peer or missing exact
+context fails closed without trying another recipient.
+Main validates the exact authenticated wire peer both before and after its awaited Gateway route
+lookup, then caches the normalized sender and conversation without recanonicalizing them. The
+persisted consent identity remains canonical. Owner, consent, client, generation, or security
+changes during route resolution reject registration before a source can authorize delivery.
+The fixed-field diagnostic collector can also retain main-process source-cache acceptance,
+source-validation and route-resolution rejection, approved-origin presence, bound-run hashes,
+and typed delivery/rejection reasons. Source peer/account/route fields are fixed hashed descriptors,
+not raw identities or alternative lookup keys. Its shared
+allowlist rejects arbitrary output; commands, message text, identities, and credentials are not
+included in these frames.
+Delivery diagnostics use a separate versioned, primitive-only contract with fixed stage/kind/code
+values and hashed delivery, challenge, inbound-request and provider-client correlations where
+available. Provider HTTP acceptance is not proof that the user saw a phone message. Explicit
+malformed provider return codes are unconfirmed failures; an omitted protobuf-default return
+code remains supported. No response body, exception text, command, identity or credential enters
+these frames, and an unconfirmed send does not cause an automatic retry. Acknowledgement
+inbound-request hashes are not guessed approval bindings. Reminders defer to the current prompt's
+choices and code, so they do not imply that legacy once-only consent permits durable approval.
+
+Desktop thinking state follows exact Gateway session/run lifecycle events, including external
+WeChat runs, rather than requiring a Desktop send. History's authoritative `sessionInfo` active-run
+snapshot restores state after switching or reconnecting. Older terminal events and stale snapshots
+cannot clear a newer run; lifecycle-only completion clears thinking without inventing a chat turn.
+Streamed text and tool evidence remain pending until the actual terminal chat event or
+authoritative history owns the output. Failed cancellation reports the error without falsely
+clearing authoritative busy state.
+The pinned SDK legitimately reports active projected, queued, embedded/approval-wait and
+terminal-persistence states without an `activeRunIds` property. Those snapshots preserve explicit
+session-local busy state with no invented run ID, while retaining any previously identified run
+evidence. Identified snapshots still require consistent, unique nonempty IDs. A valid authoritative
+idle snapshot clears unidentified busy state; malformed, wrong-session or stale snapshots cannot.
+History hydrates inbound user turns during these active states rather than rejecting the snapshot
+before processing its messages.
+The Desktop explicitly subscribes to the selected session's transcript and catalog lifecycle
+notifications. Only notifications matching the acknowledged selected session reach the renderer,
+and the IPC notification contains only its session key. It refreshes authoritative history during
+active runs and approval waits, so an inbound phone user turn need not wait for the assistant's
+final reply or a separate agent-start event. Subscription rejection is reported rather than
+treated as a successful observer.
+The Electron sandboxed preload keeps its runtime IPC adapters self-contained: relative runtime
+`require` imports are not supported there. Native Electron boundary regressions execute the
+emitted preload with the production sandbox defaults and verify bridge exposure plus session
+notification subscription and cleanup, rather than relying only on mocked renderer APIs.
 
 Electron main remains the sole approval authority. The WeChat plugin has a generation-local,
 token-authenticated named-pipe transport with only two operations: report a normalized inbound
@@ -200,52 +304,209 @@ pending approvals, read a challenge, choose an approval ID, mutate approval stat
 proofs, or expose the path through the ordinary `message` tool. Exact candidate replies are
 intercepted before session recording and agent dispatch. Mixed, malformed, or otherwise ambiguous
 challenge-shaped replies are also consumed and fail closed, including when the broker transport is
-uncertain. Normal messages, including bare `1`, `2`, or `3`, remain ordinary conversation input.
+uncertain. Once an exact-owner prompt is successfully sent, other input in that owner's direct
+conversation is consumed before the agent queue. Exact bare `1`/`2`/`3` select the current delivered
+prompt as described below; other input makes no decision and receives at most three reminders with
+a five-second minimum interval. It never extends the deadline. While this remote-approval transport
+is enabled, reserved numeric replies without an active prompt are rejected rather than dispatched
+to the agent.
 The long-poll loop advances its in-memory server cursor before placing ordinary messages on its
 serialized dispatch queue, allowing an exact approval reply to be consumed while the originating
 agent run is waiting. It persists the cursor only after the covered ordinary dispatches complete,
 so a crash replays rather than drops them.
 
-The reserved plain-text prompt begins `[MicroClaw Security Approval #CODE]`. The code is eight
-characters from an unambiguous 32-symbol alphabet (40 bits), generated with `randomBytes`, valid for
-two minutes, one-use, and limited to three wrong attempts plus a global attempt window. The current
-execution approval contract does not carry trustworthy field-level sensitivity provenance, so
-remote eligibility is deliberately fail-closed rather than based on a finite secret denylist.
-Electron derives a separate presentation DTO only for exact built-in, read-only Windows query
-tuples with scratch CWD, no declared file access, no mutable file operand, recognized containment,
-and both `allow-once` and `deny` available:
+The reserved plain-text prompt begins `[MicroClaw Security Approval]`, with available numeric
+choices first. An internal eight-character code from an unambiguous 32-symbol alphabet (40 bits)
+is still generated with `randomBytes`; coded replies remain supported, but no visible code is required
+by the default phone UX. Each challenge is valid for at most two minutes, one-use, and limited to
+three wrong attempts plus a global attempt window. Multi-request batches stay local-only.
+The actual permission deadline is the earlier of the original 60-second Desktop window and the
+Gateway expiry. The phone prompt and Desktop countdown use that same deadline. The short phone
+summary includes a validated literal operation and unchanged target, actual executable path
+(not just a trusted-looking basename), every declared RO/RW grant, force/recurse/content/encoding/
+no-newline effects, scoped initialization when present, expiry, and current-conversation scope.
+Empty public content is shown explicitly. Generic already-safe commands retain their exact command
+representation. Ordinary initialized create/delete fixtures are kept within approximately 600
+characters. The Desktop retains the unchanged full executed command, executable/hash, argv, physical
+canonical CWD, initialization metadata, access, agent/session and mode. These full technical details
+are deliberately not duplicated or split into JSON fragments on the phone.
+If required fields exceed deterministic request/argument/declaration/line/total limits, contain
+control, C0/C1, surrogate, bidi/format/default-ignorable, line/paragraph separator, zero-width,
+variation-selector, or similar concealment characters, or appear secret-bearing or ambiguously
+redacted, MicroClaw creates no remote challenge and leaves the normal local approval pending.
+OpenClaw 2026.10.2 does not carry reliable sensitive-value provenance for every command display
+field, so Phase 1 additionally uses a fail-closed structured presentation allowlist. The full
+command must exactly reconstruct from the signed argv; executable/CWD/declaration values must be
+canonical local paths or fixed structural bindings; and arguments are limited to bounded
+parameterless switches, explicitly classified path/enum switch values, boolean literals, and short
+relative filenames. Arbitrary positional text or numbers, inline option values, URLs, long opaque
+values, credential-semantic names, and every other unknown form remain local-only. A closed
+literal PowerShell grammar also covers `New-Item` (File/Directory), `Remove-Item` (including
+explicit recursive deletion), `Clear-Content`, `Set-Content`, and `Add-Content`, including the
+pinned outer interpreter and one literal nested interpreter. Paths must be literal local paths
+covered by an explicit RW declaration for these mutating operations. Separately typed read-only
+`Test-Path` supports one absolute literal positional target, `-Path`, or `-LiteralPath`, in the
+direct or single nested form; an explicit covering RO **or** RW declaration is required. Its
+phone action is “Check whether path exists,” with the unchanged target, executable and every
+grant. It needs its own approval: an earlier delete approval does not authorize verification.
+It does not add write rights or receive the create/delete-only scoped initializer.
+Script expansions, pipelines, extra invocations, unknown
+flags, wildcard/device/UNC/ADS paths and arbitrary inline contents are not eligible. Inline
+content is limited to the reviewed public primitives `""`, `"0"`, `"1"`, `"true"`, `"false"`,
+and `"null"`; other content writes stay local, even when the text happens to be non-secret.
+This is intentionally conservative: a non-secret command may still require local approval when its
+display sensitivity cannot be proven from the current execution contract.
 
-- `C:\Windows\System32\hostname.exe` with no arguments
-- `C:\Windows\System32\whoami.exe` with no arguments or exactly `/user`, `/groups`, or `/priv`
-- `C:\Windows\System32\ipconfig.exe` with no arguments or exactly `/all`
-- `C:\Windows\System32\systeminfo.exe` with no arguments
+The bounded approval-surface inventory is:
 
-The WeChat prompt is rendered exclusively from constant localized labels and recognized enums. It
-does not send raw command text, executable paths or hashes, argv, CWD, declarations, agent/session,
-or other free text to WeChat. Unknown executables or operands, free-form commands, declarations,
-non-scratch CWDs, mutable operands, unknown containment modes, secret-bearing requests, and any
-future tuple not explicitly added and reviewed remain local-only. The complete unmodified approval
-still remains in Electron memory and is integrity-bound below; the presentation DTO never weakens
-that exact binding. Fixed request/line/total caps apply to the final localized prompt.
+| Desktop family / producer | WeChat eligibility |
+| --- | --- |
+| Gateway `exec.approval.requested` for the selected bundled node, normalized from the pinned SDK's prepared `systemRunPlan` and admitted caller origin | Eligible only with the exact current authenticated owner/account/canonical run route, source registration, active generation/security and a representable command. The pinned shell producer wraps `-NoLogo -NoProfile -NonInteractive -Command`; a model-supplied literal nested interpreter is validated separately. |
+| Generic executable plus already-safe bounded argv (for example `whoami.exe /all`) | Existing exact-command presentation remains supported; it is not general script parsing or an executable trust attestation. |
+| Closed literal mutating PowerShell operations listed above | Existing explicit RW coverage and exact force/recurse/content/encoding/no-newline disclosures remain required. |
+| Closed literal `Test-Path` existence verification | The newly covered omission: positional / `-Path` / `-LiteralPath`, direct or one validated nested interpreter, with RO or RW coverage. No `-PathType`, `-IsValid`, wildcards, expressions, extra switches or additional operations. |
+| Bundled host `onApproval` / `approvalLayer=node` fallback | Desktop once/deny only. This layer has no authenticated canonical chat/run origin; no phone challenge or selected-chat activity is invented. Native proof, path/reparse and execution checks are unchanged. |
+| Legacy AppContainer `sandbox:permission-request`: `app-approval`, `file`, `shell` and `shell-async` application/folder/ACL decisions | Desktop only, separate from MXC Gateway decisions. The legacy callback lacks an authoritative canonical conversation/run binding, so its global popup does not create a selected-chat execution row. |
+| Native remote-approval owner/consent choices and exact durable records | Settings/native authority, not another phone command type. Existing eligible exact durable use can avoid a pending prompt; it does not synthesize a new run or execution-success event. |
 
-- `1 CODE` approves the exact first/current request once.
-- `2 CODE` denies the exact request.
-- `3 CODE` approves only the explicitly enumerated requests from the same originating WeChat
-  message once. Phase 1 enumerates a one-item batch, so options 1 and 3 are equivalent.
+Arbitrary PowerShell, `Get-Content` / `Get-ChildItem` / other new operation families, encoded/file/
+profile/interactive forms, sensitive or unrepresentable data, and unsupported executable syntax
+remain Desktop-only rather than being accepted as loosely parsed scripts. Missing owner/source/
+route/security authority, undelivered or ambiguous challenges, queued requests, and expired/replayed
+replies are authorization/delivery states, **not** additional permission types to enable. No native
+permission family or general script support was added. The directly coupled safe `Test-Path` forms
+above are covered; this is not a claim that all Desktop approvals are phone-eligible.
+
+In Limited-DACL only, the Windows host prepares a versioned public PowerShell filesystem scope
+for the closed literal directory-creation and removal forms above (direct Windows PowerShell or
+one literal nested Windows PowerShell). Windows PowerShell otherwise normalizes absolute paths
+against its default drive and can fail on ungranted ancestors even when the target has the approved
+RW rights. The scoped `MicroClawCwd:` PSDrive is rooted at the physical canonical or isolated
+working directory; logical `$PWD` becomes `MicroClawCwd:\`. The physical working directory,
+original absolute target, C: drive, filesystem grants and ancestor ACLs do not change.
+
+Initialization and immutable original/final argv metadata are generated **before** executable
+identity capture and approval. Main independently regenerates them, and the proof binds them.
+Execution revalidates the prepared bytes and target, then launches those exact approved argv;
+it does not rewrite an approved command. Both phone and Desktop disclose the scoped initialization;
+the Desktop retains the complete executed command and metadata. Original output, errors and exit status are preserved;
+initialization failure exits 125 without executing the operation. Reparse targets are rejected.
+Arbitrary scripts, encoded/file/interactive/profile/relative forms and other unsupported commands
+retain their existing behavior and approval rules; this is not a general PowerShell script rewrite.
+
+- `1` approves the single current delivered request once.
+- `2` remembers the same exact conversation-scoped approval available on the Desktop, only with
+  existing native durable consent and an eligible request. Otherwise only `1`/`3` are displayed.
+- `3` denies that request. Strict `digit CODE` replies remain backward-compatible; malformed
+  coded or mixed text never falls back to a bare decision.
+
+**Temporary explicit product tradeoff — `simple-current-prompt`:** the current provider has no
+authenticated outgoing message timestamp/cursor fence. A locally generated send client ID is not
+a provider receipt identifying the prompt that the user intended. A previously unseen delayed reply
+intended for expired prompt A can therefore authorize newer delivered prompt B. This known risk is
+accepted for the simple-digit UX; it is not fixed by one pending prompt, local time, or cursor
+ordering. No timestamp or quote/client-ID heuristic is used to claim otherwise. This is an explicit
+code-level default, not a credential, owner, consent-scope or durable-authority migration.
+Only one provider-acknowledged current challenge can be selected; provider acceptance is not proof
+of human receipt. Main snapshots its challenge identity before awaiting fresh authoritative route
+resolution, so delivery or replacement during that await cannot make an earlier arrival eligible.
+Owner/account/direct conversation, agent/provider route and authoritative canonical session,
+current client/generation/security, original deadline, source cursor and first-terminal checks still
+apply. Broker-process-lifetime hashed message-ID fences reject already seen decisions, including
+pre-acknowledgement and expired replies, across challenge replacement. These replay fences do not
+identify the intended prompt of a previously unseen delayed reply.
 
 The in-memory challenge binds the authenticated sender/account/chat, source message ID and cursor,
-agent/session, exact approval IDs and batch, executable canonical path and SHA-256, argv, CWD,
+agent/session, exact approval ID, executable canonical path and SHA-256, argv, CWD,
 declarations, requested/effective mode, Gateway generation, policy fingerprint, node identity,
-active-lease hash, creation/expiry, challenge ID, and code hash. Electron revalidates the current
-pending approval, ingress release, Gateway client/generation, policy proof context, and active lease
-immediately before the existing `exec.approval.resolve` call. Remote approval always sends
-`allow-once`; it never creates or consumes a durable approval, widens folders, or changes Limited
-mode's durable-approval prohibition.
+active-lease authority fingerprint, creation/expiry, challenge ID, and code hash. Electron revalidates
+the current pending approval, ingress release, Gateway client/generation, policy proof context, and active lease
+immediately before the existing `exec.approval.resolve` call. Exact Always resolves the current
+Gateway request once and then persists the existing executable/hash/argv/CWD/access/policy/agent/
+session identity. Phone-created records additionally bind a hash of the exact native owner consent
+epoch and versioned durable capability, so MXC Off/reconsent or account replacement cannot transfer
+that authority. Existing native one-use consent remains enabled for once/deny but is never silently
+upgraded: `2` stays unavailable and prompts/reminders do not encourage consent renewal. Only the
+existing main-owned native choice can issue the current durable capability;
+renderer-supplied scope markers are rejected. It never grants
+all writes/deletes or broadens folders. A failed durable save is explicitly reported as accepted
+once, not as a successfully saved Always grant.
+
+Ordinary signed active-lease expiry renewal does not invalidate a pending phone prompt. Its opaque,
+Main-only fingerprint binds the private host instance, exact Main-owned readiness/proof context,
+revocation epoch and committed authority revision, not the renewable expiration timestamp.
+Generation/policy/node alone cannot distinguish a revoke/reissue or diagnostic/active roundtrip
+under the same tuple. Main still requires a current, unexpired active lease and matching
+process/node/generation/policy/requested/effective mode before the route await, after it, and at
+resolution. Missing, expired, diagnostic or revoked authority fails closed;
+reissue after an expiry gap, revocation, intervening diagnostic mode or host replacement cannot
+revive the old binding. The native signed lease schema and the approval's original deadline are
+unchanged; renewal never grants permission, resends a prompt or extends approval time.
 
 First resolution wins across local and remote UI. Local resolution, timeout, relock, Gateway/Node
-restart, policy or lease drift, MXC Off, logout/rebind, feature disable/revoke, shutdown, prompt-send
-failure, and excessive invalid attempts invalidate the challenge. A prompt-send failure leaves the
-normal local approval pending. Acknowledgements are system messages and never enter agent history.
+restart, policy or lease-authority drift, MXC Off, logout/rebind, feature disable/revoke, shutdown,
+prompt-send failure, and excessive code attempts invalidate the challenge. Timeout calls the actual Gateway
+deny resolver. The authoritative terminal event closes only its matching Desktop request and
+invalidates the phone challenge. A timeout receipt says expired/no timely valid decision, not that
+the operator rejected or a user decision was accepted. Accepted operator decisions are distinguished
+from an externally observed Gateway block, and none proves command execution success. Unknown resolution outcomes
+are reported as unconfirmed, never retried or falsely reported as denied. Overlapping requests
+retain their original deadlines and receive remote authority one at a time.
+
+**Pinned SDK limitation:** OpenClaw 2026.10.2 maps every explicit wire `deny` to `user-denied`,
+including the fail-closed deny sent by MicroClaw's timer. Its agent-facing tool result may therefore
+still say the user denied an expired request. Phone copy does not correct that upstream reason.
+The actual SDK contract is regression-tested: null with deny fallback means `approval-timeout`, but
+null with FULL fallback can approve. MicroClaw keeps explicit deny, does not invent resolve RPC
+fields, and does not claim that a free-form agent's attribution has been fixed.
+
+Suppression is never silent: typed, hashed diagnostics distinguish source/route, security,
+transport and presentation failures, and the Desktop shows phone-delivery/local-only state.
+Unsupported or sensitive commands with a verified source get a data-free phone local-only notice
+explaining that the command cannot be safely displayed or approved on WeChat and must be allowed
+or denied on Desktop, plus a terminal result, not leaked contents or a misleading masked consent.
+A prompt-send failure
+leaves the normal local approval pending and is not automatically resent.
+
+### Desktop activity while approvals and phone-originated runs are pending
+
+The live activity line is independent of the empty-stream illustration, live text, plans and
+completed execution rows. It says **Waiting for approval** only for a pending Main-projected
+approval bound to the selected canonical conversation/current run; **Running tool** requires a
+real unfinished tool; otherwise an observed active run says **Working**. Disconnection says that
+activity is unknown, not that the model is thinking or that execution ended. No current protocol
+signal proves a live reasoning phase, so the UI does not label all run activity “Thinking.”
+Persisted Thinking panels remain historical content, not live status.
+
+Main projects only Gateway generation, canonical origin conversation, run ID and tool-call ID for
+this display binding, not the origin's account/peer/recipient authority. The execution-policy
+session is not substituted for the canonical run conversation. An approval can display a wait
+before history discovers the run without fabricating a start time or run ID. If its decision
+arrives before discovery, the Main-observed activity stays generic Working until a real runtime/
+terminal observation; accepting a decision does not make the empty chat or send button look idle.
+Other-conversation,
+other-run, stale-generation and unbound native/global popups remain usable but do not change the
+selected run's tools. Approval decision rows are typed separately from real tools: accepting
+once/Always or denying completes the decision, never the command or whole run.
+
+The existing selected-session five-second history poll now also reconciles active work. Poll,
+session-update, lifecycle and reconnect reads share a coalesced in-flight request; event updates
+can request at most one fresh follow-up. Canonical route, load sequence, runtime revision,
+generation and disconnect fences reject stale responses. `hasActiveRun=true` with absent
+`activeRunIds` remains a supported unknown-ID projection, not an empty run list or invented ID.
+Only matching authoritative idle or an eligible exact terminal/cancel ends activity. A persisted
+final reply, completed tool rows, missing/invalid runtime data, a failed read, offline time, or
+the former 90/600-second watchdog boundaries do not establish global idle. Existing error and
+connection notices remain visible; watchdog reconciliation is bounded and never retries a command.
+These source regressions explain/fix the predicates and lifecycle contracts, not a claim that a
+particular historical Desktop packet or DOM state was observed.
+
+WeChat toggle/login/replace/disconnect controls are locked in both channel/plugin views while
+MXC is active or transitioning. Main enforces the same guard before writes/spawns/RPC, and
+activation cannot cross an in-flight account mutation or unconfirmed login writer. Cancellation
+waits for known writers to drain; an unknown writer requires an explicit Gateway stop.
+
+Acknowledgements are system messages and never enter agent history.
 An acknowledgement delivery failure does not re-dispatch the consumed approval reply. The plugin
 advances its in-memory long-poll cursor while approval is pending, but persists each cursor only
 after every ordinary message covered by it has completed dispatch; a restart therefore replays
@@ -444,6 +705,17 @@ immediately preceding every Limited launch. A changed
 status or hash, missing result, tier change, restart, or policy change closes ingress, revokes the
 lease, and requires a fresh explicit transition. The assessment is enforcement evidence, not a
 one-time warning dialog.
+
+An explicit activation performs one main-process containment validation after native consent and
+before security configuration or remote-approval persistence. Its result is scoped to that lifecycle
+transition and handed to the initial locked Gateway startup; it is not a cross-transition cache.
+Host startup and per-command revalidation remain independent fresh checks. All 18 assessment
+categories remain sequential, with category/status/elapsed diagnostics, a 30-second per-target
+limit and a 180-second helper limit; helper timeout terminates and verifies the process tree.
+The renderer waits for actual lifecycle events before gating the ordinary UI, including while the
+persisted mode is still Off. Pending/cancelled native consent and pre-start guard rejection leave
+readiness unchanged. Validation failure restores the standard runtime before service-ready releases
+the loading gate and the original error is shown.
 
 ## Readiness and activation transaction
 

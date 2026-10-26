@@ -1,6 +1,11 @@
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { readAgentRoster } from "./agent-roster";
+import {
+  POWERSHELL_FILESYSTEM_SCOPE_MARKER,
+  validatePowerShellFilesystemInitialization,
+  type PowerShellFilesystemInitialization,
+} from "./windows-node-mxc-powershell-scope";
 
 export const WINDOWS_NODE_MXC_MODE = "windows-node-mxc";
 export const WINDOWS_NODE_MXC_REQUIRED_COMMANDS = [
@@ -117,8 +122,23 @@ export interface WindowsNodeMxcFolderPlan {
 
 export type WindowsNodeMxcApprovalDecision = "deny" | "allow-once" | "allow-always";
 
+export interface WindowsNodeMxcApprovalOrigin {
+  contract: "microclaw.gateway-approval-origin.v1";
+  gatewayGeneration: string;
+  agentId: string;
+  runSessionKey: string;
+  executionSessionKey: string;
+  runId: string;
+  toolCallId: string;
+  nodeId: string;
+  channel: string;
+  accountId: string;
+  to: string;
+}
+
 export interface WindowsNodeMxcGatewayApproval {
   id: string;
+  expiresAtUnixMs?: number;
   command: string;
   executable: string;
   arguments: string[];
@@ -127,12 +147,69 @@ export interface WindowsNodeMxcGatewayApproval {
   canonicalCwd: string;
   agent: string | null;
   sessionKey: string;
+  origin?: WindowsNodeMxcApprovalOrigin;
   declaredAccess: Array<{
     access: SandboxFolderAccess;
     path: string;
   }>;
   hasMutableFileOperand: boolean;
   allowedDecisions: WindowsNodeMxcApprovalDecision[];
+  providerInitialization?: PowerShellFilesystemInitialization;
+}
+
+export interface WindowsNodeMxcApprovalActivity {
+  gatewayGeneration: string;
+  sessionKey: string;
+  runId: string;
+  toolCallId: string;
+}
+
+export interface WindowsNodeMxcRendererApproval extends Pick<
+  WindowsNodeMxcGatewayApproval,
+  | "id"
+  | "executable"
+  | "arguments"
+  | "canonicalCwd"
+  | "agent"
+  | "declaredAccess"
+  | "allowedDecisions"
+  | "expiresAtUnixMs"
+  | "providerInitialization"
+> {
+  commandText?: string;
+  approvalLayer: "gateway" | "node";
+  activity?: WindowsNodeMxcApprovalActivity;
+  remoteDelivery?:
+    | import("./windows-node-mxc-weixin-remote-approval-delivery").WeixinRemoteDeliveryState
+    | null;
+}
+
+/** Project an already authenticated origin for display, not approval authority. */
+export function projectWindowsNodeMxcApprovalForRenderer(
+  approval: WindowsNodeMxcGatewayApproval,
+  gatewayGeneration: string,
+): WindowsNodeMxcRendererApproval {
+  const { origin, ...details } = approval;
+  const activity =
+    origin?.gatewayGeneration === gatewayGeneration &&
+    origin.executionSessionKey === approval.sessionKey &&
+    origin.agentId === approval.agent &&
+    origin.runSessionKey.startsWith(`agent:${origin.agentId}:`) &&
+    origin.runId &&
+    origin.toolCallId
+      ? {
+          gatewayGeneration,
+          sessionKey: origin.runSessionKey,
+          runId: origin.runId,
+          toolCallId: origin.toolCallId,
+        }
+      : undefined;
+  return {
+    ...details,
+    approvalLayer: "gateway",
+    commandText: approval.command,
+    ...(activity ? { activity } : {}),
+  };
 }
 
 const DECLARED_ACCESS_TAG_PATTERN = /\[declare-access\]([\s\S]*?)\[\/declare-access\]/i;
@@ -235,19 +312,37 @@ function isNonEmptyStringArray(value: unknown): value is string[] {
   );
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
 export function normalizeWindowsNodeMxcGatewayApproval(
   payload: unknown,
   selectedNodeId: string,
+  gatewayGeneration?: string,
+  requestedMode?: string,
 ): WindowsNodeMxcGatewayApproval | null {
   const envelope = asRecord(payload);
   const request = asRecord(envelope.request);
   const plan = asRecord(request.systemRunPlan);
   const id = typeof envelope.id === "string" ? envelope.id.trim() : "";
+  const expiresAtMs = envelope.expiresAtMs;
   const host = typeof request.host === "string" ? request.host : "";
   const nodeId = typeof request.nodeId === "string" ? request.nodeId : "";
   const argv = plan.argv;
-  const commandText = typeof plan.commandText === "string" ? plan.commandText.trim() : "";
-  const commandPreview = typeof plan.commandPreview === "string" ? plan.commandPreview.trim() : "";
+  const hasInitialization = Object.hasOwn(plan, "providerInitialization");
+  const commandText =
+    typeof plan.commandText === "string"
+      ? hasInitialization
+        ? plan.commandText
+        : plan.commandText.trim()
+      : "";
+  const commandPreview =
+    typeof plan.commandPreview === "string"
+      ? hasInitialization
+        ? plan.commandPreview
+        : plan.commandPreview.trim()
+      : "";
   const executablePath = typeof plan.executablePath === "string" ? plan.executablePath.trim() : "";
   const executableSha256 =
     typeof plan.executableSha256 === "string" ? plan.executableSha256.toLowerCase() : "";
@@ -274,6 +369,8 @@ export function normalizeWindowsNodeMxcGatewayApproval(
     typeof plan.commandPreview === "string";
   if (
     !id ||
+    (expiresAtMs !== undefined &&
+      (!Number.isSafeInteger(expiresAtMs) || Number(expiresAtMs) <= 0)) ||
     host !== "node" ||
     nodeId.toLowerCase() !== selectedNodeId.trim().toLowerCase() ||
     !isNonEmptyStringArray(argv) ||
@@ -291,6 +388,22 @@ export function normalizeWindowsNodeMxcGatewayApproval(
   ) {
     return null;
   }
+  const providerInitialization =
+    hasInitialization && requestedMode === "limited-dacl"
+      ? validatePowerShellFilesystemInitialization(
+          plan.providerInitialization,
+          argv,
+          executablePath,
+          declaredAccess,
+          commandPreview,
+        )
+      : null;
+  if (
+    (hasInitialization && !providerInitialization) ||
+    (!hasInitialization &&
+      argv.some((argument) => argument.includes(POWERSHELL_FILESYSTEM_SCOPE_MARKER)))
+  )
+    return null;
 
   const advertised = Array.isArray(envelope.allowedDecisions)
     ? envelope.allowedDecisions
@@ -305,8 +418,45 @@ export function normalizeWindowsNodeMxcGatewayApproval(
   if (!allowed.includes("allow-once")) allowed.unshift("allow-once");
   if (!allowed.includes("allow-always")) allowed.push("allow-always");
 
+  const rawOrigin = asRecord(request.remoteApprovalOrigin);
+  const origin =
+    rawOrigin.contract === "microclaw.gateway-approval-origin.v1" &&
+    typeof gatewayGeneration === "string" &&
+    rawOrigin.gatewayGeneration === gatewayGeneration &&
+    rawOrigin.agentId === plan.agentId &&
+    rawOrigin.executionSessionKey === plan.sessionKey &&
+    rawOrigin.runId === request.runId &&
+    rawOrigin.toolCallId === request.toolCallId &&
+    rawOrigin.nodeId === request.nodeId &&
+    isNonEmptyString(rawOrigin.agentId) &&
+    isNonEmptyString(rawOrigin.runSessionKey) &&
+    isNonEmptyString(rawOrigin.runId) &&
+    isNonEmptyString(rawOrigin.toolCallId) &&
+    isNonEmptyString(rawOrigin.channel) &&
+    isNonEmptyString(rawOrigin.accountId) &&
+    isNonEmptyString(rawOrigin.to) &&
+    rawOrigin.channel === request.turnSourceChannel &&
+    rawOrigin.accountId === request.turnSourceAccountId &&
+    rawOrigin.to === request.turnSourceTo &&
+    isNonEmptyString(plan.sessionKey)
+      ? {
+          contract: "microclaw.gateway-approval-origin.v1" as const,
+          gatewayGeneration,
+          agentId: rawOrigin.agentId,
+          runSessionKey: rawOrigin.runSessionKey,
+          executionSessionKey: plan.sessionKey,
+          runId: rawOrigin.runId,
+          toolCallId: rawOrigin.toolCallId,
+          nodeId,
+          channel: rawOrigin.channel,
+          accountId: rawOrigin.accountId,
+          to: rawOrigin.to,
+        }
+      : undefined;
+
   return {
     id,
+    ...(typeof expiresAtMs === "number" ? { expiresAtUnixMs: expiresAtMs } : {}),
     command: commandText,
     executable: argv[0],
     arguments: argv.slice(1),
@@ -315,9 +465,11 @@ export function normalizeWindowsNodeMxcGatewayApproval(
     canonicalCwd: cwdBinding,
     agent: typeof plan.agentId === "string" && plan.agentId.trim() ? plan.agentId : null,
     sessionKey: plan.sessionKey as string,
+    ...(origin ? { origin } : {}),
     declaredAccess,
     hasMutableFileOperand,
     allowedDecisions: [...new Set(allowed)],
+    ...(providerInitialization ? { providerInitialization } : {}),
   };
 }
 

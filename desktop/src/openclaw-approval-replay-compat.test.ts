@@ -893,7 +893,7 @@ describe("pinned OpenClaw node approval proof backport", () => {
         "validates the plan projection and retains upstream rejection helpers: %s",
         (rejectHelper) => {
           const patched = patchPinnedOpenClawExecApproval(
-            `${PINNED_EXEC_APPROVAL_VALIDATION_SOURCE}${rejectHelper}\n\t\t\tconst p = params;`,
+            `${PINNED_EXEC_APPROVAL_VALIDATION_SOURCE}${rejectHelper}\n\t\t\tconst p = params;\n\t\t\tif (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {`,
           );
 
           expect(patched).toContain("const validationParams = rawPlan");

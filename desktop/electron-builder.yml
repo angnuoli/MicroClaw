@@ -5,6 +5,9 @@ copyright: Copyright © 2026 MicroClaw
 directories:
   output: release
 
+afterSign: scripts/update-signed-windows-node-manifest.mjs
+afterPack: scripts/finalize-packaged-weixin-resource.mjs
+
 win:
   target:
     - target: nsis
@@ -65,21 +68,30 @@ extraResources:
     to: openclaw/
   - from: resources/openclaw.asar
     to: openclaw.asar
-  - from: mxc-plugin/
-    to: mxc-plugin/
-  - from: node_modules/@microsoft/mxc-sdk/
-    to: mxc-plugin/node_modules/@microsoft/mxc-sdk/
-  - from: node_modules/node-pty/
-    to: mxc-plugin/node_modules/node-pty/
-  - from: node_modules/semver/
-    to: mxc-plugin/node_modules/semver/
-
+  - from: resources/windows-node/
+    to: windows-node/
+  - from: resources/openclaw-weixin/
+    to: openclaw-weixin/
+  - from: ../appcontainer/bin/Release/net9.0-windows/win-x64/AppContainerLauncher.exe
+    to: AppContainerLauncher.exe
+  - from: ../appcontainer/sandbox-preload.js
+    to: sandbox-preload.js
+  - from: ../appcontainer/sandbox-host-runtime.js
+    to: sandbox-host-runtime.js
+  - from: ../appcontainer/sandbox-state.js
+    to: sandbox-state.js
+  - from: ../appcontainer/sandbox-permission.js
+    to: sandbox-permission.js
+  - from: ../appcontainer/sandbox-fs-hooks.js
+    to: sandbox-fs-hooks.js
+  - from: ../appcontainer/sandbox-cp-hooks.js
+    to: sandbox-cp-hooks.js
+  - from: ../appcontainer/sandbox-sensitive.js
+    to: sandbox-sensitive.js
+  - from: ../appcontainer/path-extraction.js
+    to: path-extraction.js
   - from: ../skills/rednote-publisher/
     to: agent-skills/rednote-publisher/
-
-asarUnpack:
-  - node_modules/@microsoft/mxc-sdk/bin/**/*
-  - node_modules/node-pty/**/*
 
 files:
   - dist/**/*
