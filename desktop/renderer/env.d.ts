@@ -33,6 +33,36 @@ interface AppSettings {
   };
 }
 
+interface MxcFolderPolicy {
+  readonlyPaths: string[];
+  readwritePaths: string[];
+  workspace?: string | null;
+  deniedPaths?: string[];
+}
+
+interface MxcStatus {
+  ready: boolean;
+  packageReady: boolean;
+  hashReady: boolean;
+  osSupported: boolean;
+  policyReady: boolean;
+  workerReady: boolean;
+  sdkVersion: string;
+  policyVersion: string;
+  upstreamCommit: string;
+  architecture: string;
+  binaryHash: string | null;
+  isolationTier: "base-container" | "appcontainer-bfs" | "appcontainer-dacl" | null;
+  isolationWarnings: string[];
+  requiresHostPreparation: boolean;
+  lastError: string | null;
+  agents: Array<{
+    id: string;
+    name: string;
+    desired: MxcFolderPolicy;
+    effective: MxcFolderPolicy;
+  }>;
+}
 type WindowsNodeMxcAmbientAccessCategory =
   | "desktop"
   | "documents"
@@ -277,7 +307,6 @@ interface OpenClawAPI {
         };
       }) => void,
     ): () => void;
-    onExecCommand?(callback: (data: { shell: string; command: string }) => void): () => void;
   };
   cron: {
     list(): Promise<{
@@ -404,6 +433,13 @@ interface OpenClawAPI {
   };
   logs: {
     exportGateway(lines: string[]): Promise<{ canceled: boolean; filePath?: string }>;
+  };
+  mxc: {
+    getStatus(): Promise<MxcStatus>;
+    chooseFolder(agentId: string, access: "ro" | "rw"): Promise<MxcStatus>;
+    removeFolder(agentId: string, access: "ro" | "rw", path: string): Promise<MxcStatus>;
+    retry(): Promise<MxcStatus>;
+    cleanup(): Promise<MxcStatus>;
   };
   windowsNodeMxc: {
     getStatus(): Promise<{

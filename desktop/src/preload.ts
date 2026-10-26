@@ -8,6 +8,10 @@ import type { OpenAttachmentRequest } from "./attachment-open";
 import type { LocalModelAPI, LocalModelOperation } from "./local-model-types";
 import type { SessionModelAPI } from "./session-model-types";
 
+async function rejectNativeSandboxBackend(): Promise<never> {
+  throw new Error("Windows Node MXC is unavailable in the mandatory MXC worker backend");
+}
+
 contextBridge.exposeInMainWorld("openclaw", {
   features: {
     githubCopilot: process.argv.includes("--microclaw-internal-github-copilot"),
@@ -182,16 +186,6 @@ contextBridge.exposeInMainWorld("openclaw", {
       ipcRenderer.on("agent:tool-event", handler);
       return () => ipcRenderer.removeListener("agent:tool-event", handler);
     },
-
-    /**
-     * Subscribe to actual shell command notifications from sandbox-preload.
-     * Fired when the sandbox executes a shell command, providing the real command payload.
-     */
-    onExecCommand: (callback: (data: { shell: string; command: string }) => void) => {
-      const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on("sandbox:exec-command", handler);
-      return () => ipcRenderer.removeListener("sandbox:exec-command", handler);
-    },
   },
 
   // --- Cron / Scheduled Tasks ---
@@ -224,10 +218,9 @@ contextBridge.exposeInMainWorld("openclaw", {
         ipcRenderer.invoke("plugin:weixin:login-qr-wait", params),
       disconnect: (params?: { accountId?: string }) =>
         ipcRenderer.invoke("plugin:weixin:disconnect", params),
-      getRemoteApprovalStatus: () => ipcRenderer.invoke("plugin:weixin:remote-approval:get-status"),
-      setRemoteApprovalEnabled: (enabled: boolean) =>
-        ipcRenderer.invoke("plugin:weixin:remote-approval:set-enabled", enabled),
-      revokeRemoteApproval: () => ipcRenderer.invoke("plugin:weixin:remote-approval:revoke"),
+      getRemoteApprovalStatus: rejectNativeSandboxBackend,
+      setRemoteApprovalEnabled: rejectNativeSandboxBackend,
+      revokeRemoteApproval: rejectNativeSandboxBackend,
       onLoginOutput: (callback: (text: string) => void) => {
         const handler = (_event: any, text: string) => callback(text);
         ipcRenderer.on("plugin:weixin:login-output", handler);
@@ -360,40 +353,30 @@ contextBridge.exposeInMainWorld("openclaw", {
       }>,
   },
 
+  // --- Microsoft MXC experimental sandbox ---
+  mxc: {
+    getStatus: () => ipcRenderer.invoke("mxc:get-status"),
+    chooseFolder: (agentId: string, access: "ro" | "rw") =>
+      ipcRenderer.invoke("mxc:choose-folder", { agentId, access }),
+    removeFolder: (agentId: string, access: "ro" | "rw", folderPath: string) =>
+      ipcRenderer.invoke("mxc:remove-folder", { agentId, access, path: folderPath }),
+    retry: () => ipcRenderer.invoke("mxc:retry"),
+    cleanup: () => ipcRenderer.invoke("mxc:cleanup"),
+  },
+
   windowsNodeMxc: {
-    getStatus: () => ipcRenderer.invoke("windows-node-mxc:get-status"),
-    preflight: (params?: { requestedMode?: "off" | "full" | "limited-dacl" }) =>
-      ipcRenderer.invoke("windows-node-mxc:preflight", params),
-    setEnabled: (params: {
-      enabled?: boolean;
-      requestedMode?: "off" | "full" | "limited-dacl";
-      acknowledgeLimitedFilesystem?: boolean;
-      nodeId?: string;
-    }) => ipcRenderer.invoke("windows-node-mxc:set-enabled", params),
-    validateFolderPolicy: (draft: { rw: string[]; ro: string[] }) =>
-      ipcRenderer.invoke("windows-node-mxc:validate-folder-policy", draft),
-    applyFolderPolicy: (draft: { rw: string[]; ro: string[] }) =>
-      ipcRenderer.invoke("windows-node-mxc:apply-folder-policy", draft),
-    listDurableApprovals: () => ipcRenderer.invoke("windows-node-mxc:durable-approvals:list"),
-    revokeDurableApproval: (id: string) =>
-      ipcRenderer.invoke("windows-node-mxc:durable-approvals:revoke", id),
-    revokeAllDurableApprovals: () =>
-      ipcRenderer.invoke("windows-node-mxc:durable-approvals:revoke-all"),
-    getPendingApproval: () => ipcRenderer.invoke("windows-node-mxc:approval-current"),
-    respondApproval: (params: {
-      requestId: string;
-      decision: "deny" | "allow-once" | "allow-always";
-    }) => ipcRenderer.invoke("windows-node-mxc:approval-respond", params),
-    onApprovalRequest: (callback: (request: unknown) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, request: unknown) => callback(request);
-      ipcRenderer.on("windows-node-mxc:approval-request", handler);
-      return () => ipcRenderer.removeListener("windows-node-mxc:approval-request", handler);
-    },
-    onLifecycleState: (callback: (state: unknown) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
-      ipcRenderer.on("windows-node-mxc:lifecycle-state", handler);
-      return () => ipcRenderer.removeListener("windows-node-mxc:lifecycle-state", handler);
-    },
+    getStatus: rejectNativeSandboxBackend,
+    preflight: rejectNativeSandboxBackend,
+    setEnabled: rejectNativeSandboxBackend,
+    validateFolderPolicy: rejectNativeSandboxBackend,
+    applyFolderPolicy: rejectNativeSandboxBackend,
+    listDurableApprovals: rejectNativeSandboxBackend,
+    revokeDurableApproval: rejectNativeSandboxBackend,
+    revokeAllDurableApprovals: rejectNativeSandboxBackend,
+    getPendingApproval: rejectNativeSandboxBackend,
+    respondApproval: rejectNativeSandboxBackend,
+    onApprovalRequest: () => () => {},
+    onLifecycleState: () => () => {},
   },
 
   // --- Tool Sandbox ---
