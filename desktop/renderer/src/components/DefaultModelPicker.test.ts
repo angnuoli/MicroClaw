@@ -77,7 +77,7 @@ describe("DefaultModelPicker", () => {
     expect(dialog?.getAttribute("aria-label")).toBe("Default model");
   });
 
-  it("keeps specialized models visible but blocks incompatible default selection", async () => {
+  it("hides incompatible Qwen models from default selection", async () => {
     const wrapper = await open();
     await wrapper.setProps({
       modelValue: "qwen/qwen3.7-plus",
@@ -91,11 +91,10 @@ describe("DefaultModelPicker", () => {
         },
       ],
     });
-    expect(wrapper.findAll("[data-model-ref]")).toHaveLength(2);
-    const incompatible = wrapper.get('[data-model-ref="qwen/qwen3.8-omni-flash-realtime"]');
-    expect(incompatible.attributes("disabled")).toBeDefined();
-    expect(incompatible.text()).toContain("Requires realtime API");
-    await incompatible.trigger("click");
+    expect(wrapper.findAll("[data-model-ref]")).toHaveLength(1);
+    expect(wrapper.find('[data-model-ref="qwen/qwen3.8-omni-flash-realtime"]').exists()).toBe(
+      false,
+    );
     expect(wrapper.emitted("change")).toBeUndefined();
     expect(
       wrapper.get('[data-model-ref="qwen/qwen3.7-plus"]').attributes("disabled"),
