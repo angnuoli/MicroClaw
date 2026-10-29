@@ -10,8 +10,44 @@ import {
   shouldHandleGatewayDisconnect,
   type GatewayEventFrame,
 } from "./gateway-client";
-import { AGENT_WARMUP_SESSION_KEY } from "./constants";
+import { AGENT_WARMUP_SESSION_KEY, WS_REQUEST_TIMEOUT_MS } from "./constants";
 import { GatewaySessionObserver } from "./gateway-session-observer";
+
+describe("GatewayClient agent roster", () => {
+  it.each([undefined, 250])("forwards the roster RPC timeout budget %s", async (timeoutMs) => {
+    const client = Object.create(GatewayClient.prototype) as GatewayClient;
+    const result = { agents: [{ id: "main" }] };
+    const request = vi.spyOn(client, "request").mockResolvedValue(result);
+
+    await expect(client.listAgents(timeoutMs)).resolves.toEqual(result);
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "agents.list",
+      undefined,
+      timeoutMs ?? WS_REQUEST_TIMEOUT_MS,
+    );
+  });
+
+  it("clears an unanswered roster request when its remaining budget expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = Object.create(GatewayClient.prototype) as GatewayClient;
+      const send = vi.fn();
+      Object.assign(client, { pending: new Map(), ws: { readyState: 1, send } });
+      const response = client.listAgents(250);
+      const rejected = expect(response).rejects.toThrow(
+        "request 'agents.list' timed out after 250ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(250);
+      await rejected;
+      expect(client["pending"].size).toBe(0);
+      expect(send).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("GatewayClient WeChat QR login", () => {
   it.each([

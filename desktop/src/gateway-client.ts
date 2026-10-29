@@ -568,8 +568,8 @@ export class GatewayClient {
   }
 
   /** List available agents. */
-  listAgents(): Promise<{ agents?: unknown[] }> {
-    return this.request("agents.list");
+  listAgents(timeoutMs = WS_REQUEST_TIMEOUT_MS): Promise<{ agents?: unknown[] }> {
+    return this.request("agents.list", undefined, timeoutMs);
   }
 
   getChannelsStatus(timeoutMs = WS_REQUEST_TIMEOUT_MS): Promise<GatewayChannelsStatusPayload> {
