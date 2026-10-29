@@ -193,6 +193,7 @@ type UpdateCheckResult =
 interface OpenClawAPI {
   readonly features: {
     readonly githubCopilot: boolean;
+    readonly performance?: boolean;
   };
   gateway: {
     getPort(): Promise<number>;

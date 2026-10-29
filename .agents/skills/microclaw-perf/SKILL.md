@@ -36,11 +36,15 @@ scenarios before measuring.
 2. Locate the checked-in performance runner and use its defined commands if present.
    Reuse deterministic helpers for execution, timing, aggregation, and comparison
    rather than recreating those operations in the agent's reasoning.
-3. This skill initially defines the workflow and contracts. Existing installer and
-   startup instrumentation is available, but a unified scenario runner is not yet
-   implemented. Do not invent runner commands or imply that all three scenarios
-   are automated. If no runner exists, identify usable evidence and report the
-   measurement/automation gap for each requested scenario.
+3. Use `npm run perf -- report --app "<packaged executable>" --scenario
+   app.restart,chat.new-session --samples <authorized count>` for desktop scenarios.
+   See [runner usage and limitations](../../../../docs/performance-runner.md) before
+   execution. The runner defaults to a deterministic local model fixture; real-model
+   runs require an explicit model, sample count and whole-run request budget.
+   Clean installation requires an explicitly disposable external VM adapter; no
+   VM provisioning backend is bundled. Missing prerequisites produce an unavailable
+   report, not synthetic timings. Do not launch an older binary without the runner's
+   isolation contract or silently build/replace an application artifact.
 4. Prefer a packaged application built from the recorded source. Keep build time
    outside runtime metrics. A dev-mode measurement is allowed when requested, but
    label it explicitly and do not compare it with a packaged build.

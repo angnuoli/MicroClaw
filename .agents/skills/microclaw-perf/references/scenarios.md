@@ -12,10 +12,12 @@ The chat path starts in `desktop/renderer/src/stores/chat.ts`: `sendMessage`
 dispatches a request, while `handleChatEvent` handles streamed and final output.
 The send promise alone does not establish that the answer is complete.
 
-There is not yet a unified runner, automatic clean-install fixture, or committed
-performance baseline. These definitions are the contract for those implementations,
-not evidence that they have run. Prefer current source over stale names in this
-reference when locating an existing hook.
+The unified runner is `scripts/performance/cli.mjs`, exposed through `npm run perf`.
+Read [runner usage and limitations](../../../../docs/performance-runner.md) for
+commands, packaging/isolation requirements and the external clean-install VM
+adapter contract. No VM provisioning backend or committed performance baseline is
+bundled. Tests and synthetic adapter fixtures are not evidence of a real application
+or installation run. Prefer current source when locating an existing hook.
 
 ## Initial scenarios
 

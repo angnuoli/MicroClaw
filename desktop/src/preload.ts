@@ -14,6 +14,7 @@ import type { SessionModelAPI } from "./session-model-types";
 contextBridge.exposeInMainWorld("openclaw", {
   features: {
     githubCopilot: process.argv.includes("--microclaw-internal-github-copilot"),
+    performance: process.argv.includes("--microclaw-performance"),
   },
   // --- Gateway lifecycle ---
   gateway: {
