@@ -838,7 +838,11 @@ modifying the installed package or requiring a configured Gateway.
 
 OpenClaw's doctor migrates the roster to keyed `agents.entries` with explicit ownership.
 Desktop startup, skill updates and MXC policy changes preserve this format and never reintroduce
-the retired per-agent `default` marker. Node command policy uses `gateway.nodes.commands.allow`
+the retired per-agent `default` marker. Legacy lists are accepted only as migration input; writes
+always use keyed entries without default markers. When an older roster becomes multi-agent, Desktop
+materializes the previous default agent's workspace and implicit surface owners before setting
+`agents.ownership` to `explicit`. A Gateway configuration rejection (exit 78) is a startup failure,
+not a health-check timeout. Node command policy uses `gateway.nodes.commands.allow`
 and `.deny`; execution timeouts use `timeoutSeconds`.
 
 The same pinned Gateway binds approval registration and replay to the prepared plan's exact argv,

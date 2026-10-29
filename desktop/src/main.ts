@@ -39,6 +39,7 @@ import type { LocalModelReceipt } from "./local-model-types";
 import {
   applyAgentRosterReload,
   getGatewayProcessStdio,
+  getGatewayStartupFailure,
   hardRestartGateway,
   isApplicationServiceReadyState,
   shouldRetryGatewayStartup,
@@ -123,6 +124,7 @@ import {
   MIN_WINDOW_WIDTH,
   MIN_WINDOW_HEIGHT,
   WEIXIN_LOGIN_TIMEOUT_MS,
+  WS_REQUEST_TIMEOUT_MS,
   SKILLS_STATUS_TIMEOUT_MS,
   USAGE_QUERY_DAYS,
   UPDATE_MANIFEST_URL,
@@ -3411,8 +3413,8 @@ async function applyGatewayAgentRoster(
 ) {
   if (!gwClient?.connected) throw new Error("Gateway not connected");
   return await applyAgentRosterReload({
-    listAgentIds: async () => {
-      const result = await gwClient!.listAgents();
+    listAgentIds: async (timeoutMs) => {
+      const result = await gwClient!.listAgents(Math.min(timeoutMs, WS_REQUEST_TIMEOUT_MS));
       if (!Array.isArray(result.agents))
         throw new Error("OpenClaw returned an invalid agent roster");
       return new Set(
@@ -5303,6 +5305,7 @@ async function startGatewayInner(
       }
     });
     let startupStderr = "";
+    let startupError: Error | undefined;
     child.stderr?.on("data", (data: Buffer) => {
       startupStderr = (startupStderr + data.toString("utf-8")).slice(-8192);
       const msg = data.toString("utf-8").trim();
@@ -5313,6 +5316,7 @@ async function startGatewayInner(
     });
 
     child.on("error", (err) => {
+      startupError = err;
       electronLifecycleDiagnostics.log("gateway-spawn-error", {
         gatewayPid: child.pid ?? null,
         error: summarizeLifecycleError(err),
@@ -5415,24 +5419,22 @@ async function startGatewayInner(
         console.log("[gateway] Retrying once after plugin migration convergence requested restart");
         return startGatewayInner(startupRetriesRemaining - 1);
       }
-      mainWindow?.webContents.send(
-        "gateway:log",
-        `[warn] Gateway health check timed out on port ${configuredPort}`,
+      const failure = getGatewayStartupFailure(
+        configuredPort,
+        child.exitCode,
+        child.signalCode,
+        startupError,
       );
+      mainWindow?.webContents.send("gateway:log", `[error] ${failure.message}`);
       mainWindow?.webContents.send(
         "gateway:log",
         `[info] node=${nodePath} entry=${entryPath} stateDir=${stateDir}`,
       );
-      stopGatewayProcess("Gateway startup health check timed out");
+      stopGatewayProcess(failure.message);
       rollbackStartupAgentSkills();
-      setGatewayStatus("timeout");
-      signalPostInstallFailure(
-        new Error(
-          child.exitCode !== null
-            ? `Gateway exited during startup (code ${child.exitCode}); see the desktop handoff log`
-            : "Gateway health check timed out",
-        ),
-      );
+      setGatewayStatus(failure.status);
+      signalPostInstallFailure(new Error(failure.message));
+      if (failure.status === "failed") return;
     }
     // Always connect WS — even on timeout the gateway may start shortly after,
     // and GatewayClient has built-in reconnect with exponential backoff.
