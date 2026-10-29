@@ -38,7 +38,7 @@ scenarios before measuring.
    rather than recreating those operations in the agent's reasoning.
 3. Use `npm run perf -- report --app "<packaged executable>" --scenario
    app.restart,chat.new-session --samples <authorized count>` for desktop scenarios.
-   See [runner usage and limitations](../../../../docs/performance-runner.md) before
+   See [runner usage and limitations](../../../docs/performance-runner.md) before
    execution. The runner defaults to a deterministic local model fixture; real-model
    runs require an explicit model, sample count and whole-run request budget.
    Clean installation requires an explicitly disposable external VM adapter; no
