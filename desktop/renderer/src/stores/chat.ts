@@ -4,6 +4,7 @@ import { useSessionStore } from "./sessions";
 import { redactPii } from "@/utils/pii-scanner";
 import { hydratePrivacyControls, privacyControlsToScanOptions } from "@/utils/privacy-settings";
 import { canonicalAgentId } from "../../../src/agent-catalog";
+import { isMainSessionKey } from "../../../src/main-session-key";
 import { ChatRunTracker } from "./chat-run-tracker";
 import type { WindowsNodeMxcApprovalActivity } from "../../../src/windows-node-mxc";
 
@@ -554,6 +555,8 @@ export const useChatStore = defineStore("chat", () => {
 
   /** Check if a message is a gateway system message (restart confirmations, doctor prompts). */
   function isGatewaySystemMessage(msg: unknown): boolean {
+    const message = msg as { role?: string; __openclaw?: { kind?: string } } | null;
+    if (message?.role === "system" && message.__openclaw?.kind === "reset") return true;
     const text = extractText(msg);
     if (!text) return false;
     return (
@@ -1907,16 +1910,75 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  const sessionResetPromises = new Map<string, Promise<void>>();
+
+  function gatewaySessionKey(key: string): string {
+    return key === sessionKey.value
+      ? resolvedSessionKey.value || key
+      : sessionStateCache.get(key)?.resolvedSessionKey || key;
+  }
+
+  function isMainSession(key: string): boolean {
+    return isMainSessionKey(gatewaySessionKey(key), mainSessionKey.value);
+  }
+
+  function resetSession(key: string): Promise<void> {
+    const gatewayKey = gatewaySessionKey(key);
+    const pending = sessionResetPromises.get(gatewayKey);
+    if (pending) return pending;
+    const operation = performSessionReset(key, gatewayKey);
+    sessionResetPromises.set(gatewayKey, operation);
+    void operation.then(
+      () => sessionResetPromises.delete(gatewayKey),
+      () => sessionResetPromises.delete(gatewayKey),
+    );
+    return operation;
+  }
+
+  async function performSessionReset(key: string, gatewayKey: string): Promise<void> {
+    await window.openclaw.chat.resetSession(gatewayKey);
+    const affectedKeys = new Set([key, gatewayKey]);
+    for (const [cachedKey, cached] of sessionStateCache) {
+      if (cached.resolvedSessionKey === gatewayKey) affectedKeys.add(cachedKey);
+    }
+    const active = affectedKeys.has(sessionKey.value) || resolvedSessionKey.value === gatewayKey;
+    const sessionStore = useSessionStore();
+    for (const affectedKey of affectedKeys) {
+      const cached = sessionStateCache.get(affectedKey);
+      serverRuns.reset(affectedKey, cached?.chatRunId);
+      sessionStateCache.delete(affectedKey);
+      delete lastMessageMap.value[affectedKey];
+      sessionStore.updateSession(affectedKey, { preview: "" });
+    }
+    for (const [id, activity] of Object.entries(approvalActivities.value)) {
+      if (affectedKeys.has(activity.sessionKey)) retireApprovalActivity(id);
+    }
+    sessionTitleRefreshRevision.value++;
+    if (!active) return;
+    serverRuns.reset(gatewayKey, chatRunId.value);
+    invalidateHistoryObservation();
+    resolvedSessionKey.value = gatewayKey;
+    messages.value = [];
+    streamText.value = "";
+    streamTextOffset.value = 0;
+    streamToolCalls.value = [];
+    completedToolCallsMap.value = {};
+    streaming.value = false;
+    sending.value = false;
+    chatRunId.value = null;
+    streamStartedAt.value = null;
+    lastStreamEventAt.value = null;
+    lastError.value = null;
+    await loadHistory({ showLoading: false });
+  }
+
   /**
    * Delete a session from the Gateway source of truth, then remove its local
    * state and switch away without re-adding it.
    */
   async function deleteSession(key: string) {
-    const cached = sessionStateCache.get(key);
-    const gatewayKey =
-      key === sessionKey.value
-        ? resolvedSessionKey.value || key
-        : cached?.resolvedSessionKey || key;
+    if (isMainSession(key)) return resetSession(key);
+    const gatewayKey = gatewaySessionKey(key);
 
     await window.openclaw.chat.deleteSession(gatewayKey);
 
@@ -2052,6 +2114,8 @@ export const useChatStore = defineStore("chat", () => {
     recoverAfterReconnect,
     abort,
     newSession,
+    isMainSession,
+    resetSession,
     deleteSession,
     clearAllHistory,
   };

@@ -480,15 +480,27 @@ describe("GatewayClient.deleteSession", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("deletes a non-default agent's main-named session", async () => {
+  it("resets a non-default agent's main session instead of deleting it", async () => {
     const client = createClient("agent:painter:main");
     const request = vi.spyOn(client, "request").mockResolvedValue(undefined);
 
     await client.deleteSession("agent:writer:main");
 
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
+    expect(request).toHaveBeenCalledWith("sessions.reset", {
       key: "agent:writer:main",
-      deleteTranscript: true,
+      reason: "reset",
+    });
+  });
+
+  it("exposes an explicit reset operation", async () => {
+    const client = createClient();
+    const request = vi.spyOn(client, "request").mockResolvedValue(undefined);
+
+    await client.resetSession("agent:writer:main");
+
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.reset", {
+      key: "agent:writer:main",
+      reason: "reset",
     });
   });
 

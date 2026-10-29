@@ -29,6 +29,7 @@ import {
 import { buildGatewayConnectParams, GATEWAY_OPERATOR_SCOPES } from "./gateway-protocol";
 import type { ChatAttachment } from "./chat-attachments";
 import { GatewaySessionObserver } from "./gateway-session-observer";
+import { isMainSessionKey } from "./main-session-key";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -463,16 +464,19 @@ export class GatewayClient {
   /**
    * Delete one persisted session and its transcript.
    *
-   * OpenClaw does not allow deleting the configured main session, so reset
-   * that exact canonical key instead. Other sessions, including a non-default
-   * agent's `main`-named session, are deleted normally.
+   * OpenClaw does not allow deleting an agent's main session, so reset
+   * those sessions instead. Ordinary sessions are deleted normally.
    */
   async deleteSession(sessionKey: string): Promise<void> {
-    if (sessionKey === this._mainSessionKey) {
-      await this.request("sessions.reset", { key: sessionKey, reason: "reset" });
+    if (isMainSessionKey(sessionKey, this._mainSessionKey)) {
+      await this.resetSession(sessionKey);
       return;
     }
     await this.request("sessions.delete", { key: sessionKey, deleteTranscript: true });
+  }
+
+  async resetSession(sessionKey: string): Promise<void> {
+    await this.request("sessions.reset", { key: sessionKey, reason: "reset" });
   }
 
   private async runAgentWarmup(timeoutMs: number): Promise<AgentWarmupResult> {
