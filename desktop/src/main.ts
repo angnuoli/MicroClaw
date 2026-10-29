@@ -18,6 +18,7 @@ import { createHash, randomUUID } from "crypto";
 import { ChildProcess, execFile, execFileSync, spawn } from "child_process";
 import { GatewayClient, type ChatEventPayload } from "./gateway-client";
 import { GatewayStartupTiming, type StartupTimingEvent } from "./startup-timing";
+import { configurePerformanceFixture, PERFORMANCE_ARGUMENT } from "./performance-fixture";
 import {
   hasLocalModelPrimary,
   LocalModelService,
@@ -395,6 +396,7 @@ if (shouldDisableHardwareAcceleration(process.env, process.platform, os.release(
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+const performanceFixture = configurePerformanceFixture(app, process.env);
 const internalFeatures = readInternalFeatures(process.env);
 const store = new Store<{ windowBounds: Electron.Rectangle | null }>({
   defaults: { windowBounds: null },
@@ -3731,7 +3733,10 @@ function createMainWindow(): BrowserWindow {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: internalFeatures.githubCopilot ? [INTERNAL_GITHUB_COPILOT_ARGUMENT] : [],
+      additionalArguments: [
+        ...(internalFeatures.githubCopilot ? [INTERNAL_GITHUB_COPILOT_ARGUMENT] : []),
+        ...(performanceFixture ? [PERFORMANCE_ARGUMENT] : []),
+      ],
       backgroundThrottling: !backgroundLaunch,
     },
   });
@@ -3976,7 +3981,7 @@ function stopGatewayProcess(reason = "Emergency Gateway cleanup"): void {
   let listenerScanSucceeded = gatewayPort === 0;
   let allGatewayProcessesStopped = process.platform === "win32";
   if (knownPid) pids.add(knownPid);
-  if (gatewayPort && process.platform === "win32") {
+  if (!performanceFixture && gatewayPort && process.platform === "win32") {
     try {
       const result = execFileSync("netstat", ["-ano"], {
         windowsHide: true,
@@ -4776,6 +4781,9 @@ async function startGatewayInner(
   // externally managed Gateway may observe the shared state directory.
   startupTiming.completeMicroclawPhase("configuration-and-personas");
   const alreadyRunning = await checkExistingGateway(configuredPort);
+  if (performanceFixture && alreadyRunning && !(gatewaySpawnedByUs && gatewayProcess !== null)) {
+    throw new Error("Performance fixture refuses to reuse or stop an external Gateway");
+  }
   startupTiming.completeMicroclawPhase("existing-gateway-check");
   logStartupTiming("gateway-existing-check-complete");
   const externallyManagedGateway =
@@ -4959,6 +4967,11 @@ async function startGatewayInner(
     if (gatewaySpawnedByUs && gatewayProcess) {
       await stopGatewayProcessGracefully("Replacing managed Gateway during startup");
     } else if (await isGatewayPortOccupied(configuredPort)) {
+      if (performanceFixture) {
+        throw new Error(
+          "Performance fixture Gateway port is occupied; no external process was stopped",
+        );
+      }
       stopGatewayProcess("Cleaning stale Gateway listener before startup");
     }
     const portReleaseDeadline = Date.now() + 8_000;
@@ -7633,7 +7646,7 @@ function registerIpcHandlers(): void {
       throw new Error(`Setting "${key}" cannot be changed through the generic settings API`);
     }
     settingsStore.set(key as any, value);
-    if (key === "autoStart") {
+    if (key === "autoStart" && !performanceFixture) {
       app.setLoginItemSettings({ openAtLogin: !!value });
     } else if (key === "language") {
       updateTrayMenu(gatewayStatus, resolveSupportedLocale(String(value)));
@@ -8614,7 +8627,9 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
 
   // Sync auto-start with OS
-  app.setLoginItemSettings({ openAtLogin: settingsStore.get("autoStart") });
+  if (!performanceFixture) {
+    app.setLoginItemSettings({ openAtLogin: settingsStore.get("autoStart") });
+  }
 
   const initialWindow = createMainWindow();
   mainWindow = initialWindow;
