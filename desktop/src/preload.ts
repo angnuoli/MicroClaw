@@ -152,6 +152,8 @@ contextBridge.exposeInMainWorld("openclaw", {
     deleteSession: (sessionKey: string) =>
       ipcRenderer.invoke("chat:delete-session", { sessionKey }),
 
+    resetSession: (sessionKey: string) => ipcRenderer.invoke("chat:reset-session", { sessionKey }),
+
     /** Clear ALL persisted chat history on the gateway. */
     clearHistory: () => ipcRenderer.invoke("chat:clear-history"),
 

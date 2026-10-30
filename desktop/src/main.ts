@@ -6739,6 +6739,15 @@ function registerIpcHandlers(): void {
     await gwClient.deleteSession(params.sessionKey);
   });
 
+  ipcMain.handle("chat:reset-session", async (_event, params: { sessionKey: string }) => {
+    if (!gwClient?.connected) throw new Error("Gateway not connected");
+    sessionModelService.assertIdle();
+    await withWindowsNodeMxcDurableApprovalLock(() =>
+      getWindowsNodeMxcDurableApprovalStore().revokeSession(params.sessionKey),
+    );
+    await gwClient.resetSession(params.sessionKey);
+  });
+
   ipcMain.handle("chat:clear-history", async () => {
     if (!gwClient?.connected) throw new Error("Gateway not connected");
     sessionModelService.assertIdle();

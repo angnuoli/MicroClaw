@@ -6,6 +6,7 @@ const mockLoadHistory = vi.fn().mockResolvedValue({ messages: [] });
 const mockSendMessage = vi.fn().mockResolvedValue(undefined);
 const mockAbort = vi.fn().mockResolvedValue(undefined);
 const mockDeleteSession = vi.fn().mockResolvedValue(undefined);
+const mockResetSession = vi.fn().mockResolvedValue(undefined);
 const mockGenerateSessionTitle = vi.fn().mockResolvedValue("Summary title");
 const mockIsConnected = vi.fn().mockResolvedValue(false);
 const mockGetSettings = vi.fn().mockResolvedValue({});
@@ -19,6 +20,7 @@ Object.defineProperty(globalThis, "window", {
         sendMessage: mockSendMessage,
         abort: mockAbort,
         deleteSession: mockDeleteSession,
+        resetSession: mockResetSession,
         generateSessionTitle: mockGenerateSessionTitle,
         isConnected: mockIsConnected,
         onEvent: vi.fn(),
@@ -2232,6 +2234,8 @@ describe("useChatStore — session deletion", () => {
     Object.keys(storage).forEach((k) => delete storage[k]);
     setActivePinia(createPinia());
     mockDeleteSession.mockReset().mockResolvedValue(undefined);
+    mockResetSession.mockReset().mockResolvedValue(undefined);
+    mockLoadHistory.mockReset().mockResolvedValue({ messages: [] });
   });
 
   it("uses the canonical main key and removes its local alias before deletion", async () => {
@@ -2254,12 +2258,13 @@ describe("useChatStore — session deletion", () => {
 
     await store.deleteSession("global");
 
-    expect(mockDeleteSession).toHaveBeenCalledWith("global");
+    expect(mockResetSession).toHaveBeenCalledWith("global");
+    expect(mockDeleteSession).not.toHaveBeenCalled();
     expect(sessionStore.sessions.some((session) => session.key === "main")).toBe(false);
     expect(store.sessionKey).toBe("global");
     expect(store.resolvedSessionKey).toBe("global");
     expect(sessionStore.sessions).toEqual([
-      expect.objectContaining({ key: "global", agentId: "main", preview: "" }),
+      expect.objectContaining({ key: "global", title: "Existing chat", preview: "" }),
     ]);
     expect(store.messages).toEqual([]);
   });
@@ -2290,6 +2295,133 @@ describe("useChatStore — session deletion", () => {
     expect(sessionStore.sessions.some((session) => session.key === "session-123")).toBe(true);
     expect(store.sessionKey).toBe("session-123");
     expect(store.messages).toEqual([{ role: "user", content: "keep me" }]);
+  });
+});
+
+describe("useChatStore — session reset", () => {
+  const key = "agent:main:main";
+
+  beforeEach(() => {
+    Object.keys(storage).forEach((storageKey) => delete storage[storageKey]);
+    setActivePinia(createPinia());
+    mockResetSession.mockReset().mockResolvedValue(undefined);
+    mockDeleteSession.mockReset().mockResolvedValue(undefined);
+    mockLoadHistory.mockReset().mockResolvedValue({ messages: [] });
+  });
+
+  function prepareSession() {
+    const store = useChatStore();
+    store.setMainSessionKey(key);
+    const sessions = useSessionStore();
+    sessions.ensureSession(key, "main");
+    sessions.updateSession(key, { title: "Existing chat", preview: "hello" });
+    sessions.togglePinned(key);
+    store.messages = [{ role: "user", content: "hello" }];
+    return { store, sessions };
+  }
+
+  it("clears the active main conversation without removing, unpinning or switching it", async () => {
+    const { store, sessions } = prepareSession();
+    const createdAt = sessions.sessions[0].createdAt;
+    store.handleChatEvent({ sessionKey: key, runId: "old-run", state: "status" });
+
+    await store.resetSession(key);
+
+    expect(mockResetSession).toHaveBeenCalledExactlyOnceWith(key);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+    expect(store.sessionKey).toBe(key);
+    expect(sessions.currentKey).toBe(key);
+    expect(sessions.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        title: "Existing chat",
+        preview: "",
+        pinned: true,
+        createdAt,
+      }),
+    ]);
+    expect(store.messages).toEqual([]);
+    expect(store.streaming).toBe(false);
+    expect(store.chatRunId).toBeNull();
+
+    store.handleChatEvent({
+      sessionKey: key,
+      runId: "old-run",
+      state: "final",
+      message: { role: "assistant", content: "late old reply" },
+    });
+    expect(store.messages).toEqual([]);
+  });
+
+  it("resets another agent's main session without affecting the active conversation", async () => {
+    const { store, sessions } = prepareSession();
+    const otherKey = "agent:writer:main";
+    sessions.ensureSession(otherKey, "writer");
+    sessions.updateSession(otherKey, { title: "Writer", preview: "old writer message" });
+    sessions.ensureSession(key);
+
+    await store.deleteSession(otherKey);
+
+    expect(mockResetSession).toHaveBeenCalledExactlyOnceWith(otherKey);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+    expect(store.sessionKey).toBe(key);
+    expect(sessions.currentKey).toBe(key);
+    expect(store.messages).toEqual([{ role: "user", content: "hello" }]);
+    expect(sessions.sessions.find((session) => session.key === otherKey)).toMatchObject({
+      title: "Writer",
+      preview: "",
+      agentId: "writer",
+    });
+  });
+
+  it("does not clear local content if the Gateway reset fails", async () => {
+    const { store, sessions } = prepareSession();
+    mockResetSession.mockRejectedValueOnce(new Error("Gateway not connected"));
+
+    await expect(store.resetSession(key)).rejects.toThrow("Gateway not connected");
+
+    expect(store.messages).toEqual([{ role: "user", content: "hello" }]);
+    expect(sessions.sessions[0]).toMatchObject({ key, preview: "hello", pinned: true });
+  });
+
+  it("coalesces repeated reset clicks", async () => {
+    const { store } = prepareSession();
+    let finishReset!: () => void;
+    mockResetSession.mockReturnValueOnce(new Promise<void>((resolve) => (finishReset = resolve)));
+
+    const first = store.resetSession(key);
+    const second = store.resetSession(key);
+    expect(mockResetSession).toHaveBeenCalledTimes(1);
+    finishReset();
+    await Promise.all([first, second]);
+  });
+
+  it("discards history that was requested before the reset completed", async () => {
+    const { store } = prepareSession();
+    let finishHistory!: (history: unknown) => void;
+    mockLoadHistory.mockReturnValueOnce(new Promise((resolve) => (finishHistory = resolve)));
+    const staleHistory = store.loadHistory();
+
+    await store.resetSession(key);
+    finishHistory({ sessionKey: key, messages: [{ role: "user", content: "old history" }] });
+    await staleHistory;
+
+    expect(store.messages).toEqual([]);
+  });
+
+  it("filters reset metadata without hiding real messages whose text is Reset", async () => {
+    const { store } = prepareSession();
+    mockLoadHistory.mockResolvedValueOnce({
+      sessionKey: key,
+      messages: [
+        { role: "system", content: "Reset", __openclaw: { kind: "reset" } },
+        { role: "user", content: "Reset" },
+      ],
+    });
+
+    await store.resetSession(key);
+
+    expect(store.messages).toEqual([{ role: "user", content: "Reset" }]);
   });
 });
 

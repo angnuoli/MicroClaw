@@ -264,6 +264,7 @@ interface OpenClawAPI {
     generateSessionTitle(sessionKey: string): Promise<string | null>;
     abort(sessionKey: string): Promise<void>;
     deleteSession(sessionKey: string): Promise<void>;
+    resetSession(sessionKey: string): Promise<void>;
     clearHistory(): Promise<{ cleared: number }>;
     onEvent(callback: (payload: ChatEventPayload) => void): () => void;
     onToolEvent(
